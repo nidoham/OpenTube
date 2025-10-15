@@ -1,13 +1,13 @@
 package com.nidoham.opentube.player.managers;
 
+import android.os.Looper;
 import android.util.Log;
 import android.util.LruCache;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.nidoham.flowtube.player.streams.StreamInfoCallback;
-import com.nidoham.flowtube.player.streams.StreamInfoExtractor;
+import com.nidoham.stream.data.RxStreamInfoExtractor; // নতুন ইমপোর্ট
 
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
@@ -15,12 +15,18 @@ import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers; // নতুন ইমপোর্ট
+import io.reactivex.rxjava3.core.Flowable; // নতুন ইমপোর্ট
+import io.reactivex.rxjava3.disposables.CompositeDisposable; // নতুন ইমপোর্ট
+import io.reactivex.rxjava3.disposables.Disposable; // নতুন ইমপোর্ট
+
 /**
- * Manages stream extraction, caching, and quality selection.
- * Uses LRU cache to prevent unlimited memory growth.
+ * Manages stream extraction, caching, and quality selection using RxJava.
+ * Uses LRU cache to prevent unlimited memory growth and handles retries declaratively.
  */
 public class StreamManager {
     private static final String TAG = "StreamManager";
@@ -28,9 +34,8 @@ public class StreamManager {
     private static final int MAX_RETRIES = 3;
     
     private final LruCache<String, StreamData> streamCache;
-    private final StreamInfoExtractor streamInfoExtractor;
+    private final CompositeDisposable compositeDisposable;
     
-    private final AtomicInteger retryCount = new AtomicInteger(0);
     private final AtomicBoolean isExtracting = new AtomicBoolean(false);
     
     private String qualityPreference = "720p";
@@ -117,6 +122,7 @@ public class StreamManager {
     }
     
     public StreamManager() {
+        this.compositeDisposable = new CompositeDisposable();
         this.streamCache = new LruCache<String, StreamData>(MAX_CACHE_SIZE) {
             @Override
             protected void entryRemoved(boolean evicted, String key, 
@@ -131,87 +137,69 @@ public class StreamManager {
                 return 1; // Count each entry as 1
             }
         };
-        
-        this.streamInfoExtractor = StreamInfoExtractor.getInstance();
     }
     
     /**
-     * Extract stream information with retry logic
+     * Extract stream information with declarative retry logic using RxJava
      */
     public void extractStreamInfo(@NonNull String videoUrl) {
-        if (isExtracting.getAndSet(true)) {
-            Log.w(TAG, "Extraction already in progress");
+        if (isExtracting.get()) {
+            Log.w(TAG, "Extraction already in progress for another URL");
             return;
         }
-        
-        retryCount.set(0);
-        extractStreamInfoInternal(videoUrl);
-    }
-    
-    private void extractStreamInfoInternal(String videoUrl) {
-        if (extractionListener != null) {
-            extractionListener.onExtractionStarted(videoUrl);
-        }
-        
-        streamInfoExtractor.extractStreamInfo(videoUrl, new StreamInfoCallback() {
-            @Override
-            public void onLoading() {
-                int attempt = retryCount.get() + 1;
-                Log.d(TAG, "Extracting stream info (attempt " + attempt + "): " + videoUrl);
-                
-                if (extractionListener != null) {
-                    extractionListener.onExtractionProgress(
-                        "Loading stream data...", 
-                        attempt
-                    );
-                }
-            }
-            
-            @Override
-            public void onSuccess(StreamInfo streamInfo) {
-                isExtracting.set(false);
-                
-                StreamData streamData = new StreamData(streamInfo);
-                streamData.selectQuality(qualityPreference);
-                
-                streamCache.put(videoUrl, streamData);
-                
-                Log.d(TAG, "Stream extraction successful: " + streamInfo.getName());
-                
-                if (extractionListener != null) {
-                    extractionListener.onExtractionSuccess(streamInfo, streamData);
-                }
-            }
-            
-            @Override
-            public void onError(Exception error) {
-                int currentRetry = retryCount.incrementAndGet();
-                
-                if (currentRetry < MAX_RETRIES) {
-                    Log.w(TAG, "Extraction failed, retrying... Attempt " + currentRetry, error);
-                    
+
+        Disposable disposable = RxStreamInfoExtractor.extract(videoUrl)
+                .retryWhen(errors -> {
+                    AtomicInteger counter = new AtomicInteger();
+                    return errors.flatMap(error -> {
+                        if (counter.incrementAndGet() > MAX_RETRIES) {
+                            return Flowable.error(error); // Retries exhausted, emit error
+                        }
+                        
+                        Log.w(TAG, "Extraction failed, retrying... Attempt " + counter.get(), error);
+                        if (extractionListener != null) {
+                            // Ensure listener is called on the main thread
+                            new android.os.Handler(Looper.getMainLooper()).post(() -> 
+                                extractionListener.onExtractionProgress("Retrying...", counter.get() + 1));
+                        }
+                        
+                        // Wait 2 seconds before retrying
+                        return Flowable.timer(2, TimeUnit.SECONDS);
+                    });
+                })
+                .observeOn(AndroidSchedulers.mainThread()) // Ensure results are on the main thread
+                .doOnSubscribe(d -> {
+                    isExtracting.set(true);
                     if (extractionListener != null) {
-                        extractionListener.onExtractionProgress(
-                            "Retrying...", 
-                            currentRetry + 1
-                        );
+                        extractionListener.onExtractionStarted(videoUrl);
                     }
-                    
-                    // Retry after delay
-                    new android.os.Handler(android.os.Looper.getMainLooper())
-                        .postDelayed(() -> extractStreamInfoInternal(videoUrl), 2000);
-                } else {
-                    isExtracting.set(false);
-                    String errorMsg = "Failed to extract stream after " + MAX_RETRIES + 
-                                    " attempts: " + error.getMessage();
-                    Log.e(TAG, errorMsg, error);
-                    
-                    if (extractionListener != null) {
-                        extractionListener.onExtractionError(errorMsg, error);
+                })
+                .doFinally(() -> isExtracting.set(false)) // Always reset the flag
+                .subscribe(
+                    // onSuccess
+                    streamInfo -> {
+                        StreamData streamData = new StreamData(streamInfo);
+                        streamData.selectQuality(qualityPreference);
+                        
+                        streamCache.put(videoUrl, streamData);
+                        
+                        Log.d(TAG, "Stream extraction successful: " + streamInfo.getName());
+                        if (extractionListener != null) {
+                            extractionListener.onExtractionSuccess(streamInfo, streamData);
+                        }
+                    },
+                    // onError
+                    error -> {
+                        String errorMsg = "Failed to extract stream after " + MAX_RETRIES + 
+                                        " attempts: " + error.getMessage();
+                        Log.e(TAG, errorMsg, error);
+                        if (extractionListener != null) {
+                            extractionListener.onExtractionError(errorMsg, (Exception) error);
+                        }
                     }
-                }
-            }
-        });
+                );
+        
+        compositeDisposable.add(disposable);
     }
     
     /**
@@ -274,18 +262,14 @@ public class StreamManager {
     }
     
     /**
-     * Clear cache and release resources
+     * Clear cache and release resources, including active RxJava subscriptions
      */
     public void release() {
         streamCache.evictAll();
-        
-        if (streamInfoExtractor != null) {
-            streamInfoExtractor.shutdown();
-        }
+        compositeDisposable.clear(); // Cancel all active subscriptions
         
         extractionListener = null;
         isExtracting.set(false);
-        retryCount.set(0);
         
         Log.d(TAG, "StreamManager released");
     }

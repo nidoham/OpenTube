@@ -58,6 +58,10 @@ public class MainActivity extends AppCompatActivity {
         if (savedInstanceState == null) {
             loadNavigationItem(R.id.nav_home);
         }
+        
+        binding.menuBtn.setOnClickListener(v-> {
+            startActivity(new Intent(getApplicationContext(), ExperimentActivity.class));
+        });
     }
 
     /**

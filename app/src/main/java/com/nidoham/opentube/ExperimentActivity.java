@@ -9,10 +9,11 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+// নতুন RxStreamInfoExtractor ক্লাস ইমপোর্ট করা হয়েছে
+import com.nidoham.stream.data.RxStreamInfoExtractor;
+
 import com.nidoham.flowtube.player.media.StreamSelector;
 import com.nidoham.flowtube.player.media.StreamSelector.QualityOption;
-import com.nidoham.flowtube.player.streams.StreamInfoExtractor;
-import com.nidoham.flowtube.player.streams.StreamInfoCallback;
 import com.nidoham.opentube.databinding.ActivityExperimentBinding;
 
 import org.schabi.newpipe.extractor.stream.AudioStream;
@@ -21,15 +22,21 @@ import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.util.List;
 
+// RxJava ইমপোর্ট করা হয়েছে
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
+
 public class ExperimentActivity extends AppCompatActivity {
 
     private ActivityExperimentBinding binding;
-    private StreamInfoExtractor extractor;
     private StreamSelector selector;
     private boolean isExtracting = false;
     
     private int selectedVideoId = -1;
     private int selectedAudioId = -1;
+
+    // লাইফসাইকেল ম্যানেজমেন্টের জন্য CompositeDisposable যোগ করা হয়েছে
+    private final CompositeDisposable compositeDisposable = new CompositeDisposable();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,13 +44,17 @@ public class ExperimentActivity extends AppCompatActivity {
         binding = ActivityExperimentBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
-        extractor = StreamInfoExtractor.getInstance();
+        // StreamInfoExtractor.getInstance() এর আর প্রয়োজন নেই
 
         binding.buttonLoadStream.setOnClickListener(v -> extractStream());
         binding.buttonPlay.setOnClickListener(v -> playStream());
         binding.buttonDownload.setOnClickListener(v -> downloadStream());
         
-        // Set up spinner listeners
+        // Spinner listeners আগের মতোই থাকছে
+        setupSpinnerListeners();
+    }
+
+    private void setupSpinnerListeners() {
         binding.spinnerVideoQuality.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -86,137 +97,127 @@ public class ExperimentActivity extends AppCompatActivity {
             return;
         }
 
-        isExtracting = true;
-        binding.buttonLoadStream.setEnabled(false);
-        binding.streamInfoTextView.setText("Loading stream information...");
-
-        extractor.extractStreamInfo(url, new StreamInfoCallback() {
-            @Override
-            public void onLoading() {
-                runOnUiThread(() -> {
+        // RxStreamInfoExtractor ব্যবহার করে স্ট্রিম এক্সট্র্যাক্ট করা হচ্ছে
+        Disposable disposable = RxStreamInfoExtractor.extract(url)
+                .doOnSubscribe(d -> {
+                    // onLoading() এর কাজ এখানে করা হচ্ছে
+                    isExtracting = true;
+                    binding.buttonLoadStream.setEnabled(false);
                     binding.streamInfoTextView.setText("Extracting stream data...");
-                });
-            }
-
-            @Override
-            public void onSuccess(StreamInfo info) {
-                runOnUiThread(() -> {
+                    binding.qualityCard.setVisibility(View.GONE);
+                })
+                .doFinally(() -> {
+                    // অপারেশন সফল হোক বা ব্যর্থ, সবশেষে এটি কল হবে
                     isExtracting = false;
                     binding.buttonLoadStream.setEnabled(true);
-                    
-                    selector = new StreamSelector(info);
-                    
-                    // Get quality options
-                    List<QualityOption> videoOptions = selector.getVideoQualities();
-                    List<QualityOption> audioOptions = selector.getAudioQualities();
+                })
+                .subscribe(
+                        // onSuccess
+                        info -> {
+                            selector = new StreamSelector(info);
+                            
+                            List<QualityOption> videoOptions = selector.getVideoQualities();
+                            List<QualityOption> audioOptions = selector.getAudioQualities();
 
-                    if (!videoOptions.isEmpty() || !audioOptions.isEmpty()) {
-                        // Show quality selection card
-                        binding.qualityCard.setVisibility(View.VISIBLE);
-                        
-                        // Populate video spinner
-                        if (!videoOptions.isEmpty()) {
-                            ArrayAdapter<QualityOption> videoAdapter = new ArrayAdapter<>(
-                                ExperimentActivity.this,
-                                android.R.layout.simple_spinner_item,
-                                videoOptions
-                            );
-                            videoAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-                            binding.spinnerVideoQuality.setAdapter(videoAdapter);
-                            selectedVideoId = videoOptions.get(0).id;
+                            if (!videoOptions.isEmpty() || !audioOptions.isEmpty()) {
+                                binding.qualityCard.setVisibility(View.VISIBLE);
+                                populateSpinners(videoOptions, audioOptions);
+                                updateStreamInfo();
+                            } else {
+                                binding.streamInfoTextView.setText("No video or audio streams available");
+                                binding.qualityCard.setVisibility(View.GONE);
+                            }
+                        },
+                        // onError
+                        error -> {
+                            binding.streamInfoTextView.setText("Error: " + error.getMessage());
+                            Toast.makeText(ExperimentActivity.this,
+                                "Extraction failed: " + error.getMessage(),
+                                Toast.LENGTH_LONG).show();
                         }
-                        
-                        // Populate audio spinner
-                        if (!audioOptions.isEmpty()) {
-                            ArrayAdapter<QualityOption> audioAdapter = new ArrayAdapter<>(
-                                ExperimentActivity.this,
-                                android.R.layout.simple_spinner_item,
-                                audioOptions
-                            );
-                            audioAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-                            binding.spinnerAudioQuality.setAdapter(audioAdapter);
-                            selectedAudioId = audioOptions.get(0).id;
-                        }
-                        
-                        // Update info display
-                        updateStreamInfo();
-                    } else {
-                        binding.streamInfoTextView.setText("No video or audio streams available");
-                        binding.qualityCard.setVisibility(View.GONE);
-                    }
-                });
-            }
+                );
+        
+        // ডিসপোজেবলটি CompositeDisposable-এ যোগ করা হচ্ছে যাতে onDestroy-তে এটি বাতিল করা যায়
+        compositeDisposable.add(disposable);
+    }
 
-            @Override
-            public void onError(Exception error) {
-                runOnUiThread(() -> {
-                    isExtracting = false;
-                    binding.buttonLoadStream.setEnabled(true);
-                    binding.streamInfoTextView.setText("Error: " + error.getMessage());
-                    Toast.makeText(ExperimentActivity.this, 
-                        "Extraction failed: " + error.getMessage(), 
-                        Toast.LENGTH_LONG).show();
-                });
-            }
-        });
+    private void populateSpinners(List<QualityOption> videoOptions, List<QualityOption> audioOptions) {
+        // Populate video spinner
+        if (!videoOptions.isEmpty()) {
+            ArrayAdapter<QualityOption> videoAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, videoOptions
+            );
+            videoAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            binding.spinnerVideoQuality.setAdapter(videoAdapter);
+            selectedVideoId = videoOptions.get(0).id;
+        }
+        
+        // Populate audio spinner
+        if (!audioOptions.isEmpty()) {
+            ArrayAdapter<QualityOption> audioAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, audioOptions
+            );
+            audioAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            binding.spinnerAudioQuality.setAdapter(audioAdapter);
+            selectedAudioId = audioOptions.get(0).id;
+        }
     }
     
     @Deprecated
     private void updateStreamInfo() {
+        // এই মেথডটি অপরিবর্তিত থাকছে
         if (selector == null) return;
         
-        StringBuilder info = new StringBuilder();
+        StringBuilder infoText = new StringBuilder();
         
-        // Video stream info
         if (selectedVideoId != -1) {
             VideoStream video = selector.getVideo(selectedVideoId);
             if (video != null) {
-                info.append("=== VIDEO STREAM ===\n");
-                info.append("Resolution: ").append(video.getResolution()).append("\n");
-                info.append("Format: ").append(video.getFormat().getName()).append("\n");
-                info.append("URL: ").append(video.getUrl()).append("\n\n");
+                infoText.append("=== VIDEO STREAM ===\n")
+                      .append("Resolution: ").append(video.getResolution()).append("\n")
+                      .append("Format: ").append(video.getFormat().getName()).append("\n")
+                      .append("URL: ").append(video.getUrl()).append("\n\n");
             }
         }
         
-        // Audio stream info
         if (selectedAudioId != -1) {
             AudioStream audio = selector.getAudio(selectedAudioId);
             if (audio != null) {
-                info.append("=== AUDIO STREAM ===\n");
-                info.append("Bitrate: ").append(audio.getAverageBitrate()).append(" kbps\n");
-                info.append("Format: ").append(audio.getFormat().getName()).append("\n");
-                info.append("URL: ").append(audio.getUrl()).append("\n");
+                infoText.append("=== AUDIO STREAM ===\n")
+                      .append("Bitrate: ").append(audio.getAverageBitrate()).append(" kbps\n")
+                      .append("Format: ").append(audio.getFormat().getName()).append("\n")
+                      .append("URL: ").append(audio.getUrl()).append("\n");
             }
         }
         
-        if (info.length() > 0) {
-            binding.streamInfoTextView.setText(info.toString());
+        if (infoText.length() > 0) {
+            binding.streamInfoTextView.setText(infoText.toString());
         }
     }
     
     private void playStream() {
+        // এই মেথডটি অপরিবর্তিত থাকছে
         if (selector == null || (selectedVideoId == -1 && selectedAudioId == -1)) {
             Toast.makeText(this, "No stream selected", Toast.LENGTH_SHORT).show();
             return;
         }
-        
-        // TODO: Implement play functionality
         Toast.makeText(this, "Play functionality - to be implemented", Toast.LENGTH_SHORT).show();
     }
     
     private void downloadStream() {
+        // এই মেথডটি অপরিবর্তিত থাকছে
         if (selector == null || (selectedVideoId == -1 && selectedAudioId == -1)) {
             Toast.makeText(this, "No stream selected", Toast.LENGTH_SHORT).show();
             return;
         }
-        
-        // TODO: Implement download functionality
         Toast.makeText(this, "Download functionality - to be implemented", Toast.LENGTH_SHORT).show();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // মেমোরি লিক এড়ানোর জন্য সমস্ত সাবস্ক্রিপশন বাতিল করা হচ্ছে
+        compositeDisposable.clear();
         binding = null;
     }
 }

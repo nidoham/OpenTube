@@ -12,7 +12,6 @@ import android.util.LruCache;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
@@ -28,35 +27,30 @@ import androidx.media3.exoplayer.upstream.DefaultAllocator;
 
 import com.nidoham.flowtube.player.playqueue.PlayQueue;
 import com.nidoham.flowtube.player.playqueue.PlayQueueItem;
-import com.nidoham.flowtube.player.streams.StreamInfoCallback;
-import com.nidoham.flowtube.player.streams.StreamInfoExtractor;
-import com.nidoham.opentube.R;
 import com.nidoham.opentube.player.managers.PlayerNotificationManager;
 import com.nidoham.opentube.util.constant.PlayerConstants;
+import com.nidoham.stream.data.RxStreamInfoExtractor; // নতুন ইমপোর্ট
 
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.reactivex.rxjava3.core.Flowable; // নতুন ইমপোর্ট
+import io.reactivex.rxjava3.disposables.CompositeDisposable; // নতুন ইমপোর্ট
+import io.reactivex.rxjava3.disposables.Disposable; // নতুন ইমপোর্ট
+
 /**
- * Refactored PlayerService with PlayerNotificationManager integration:
- * - Modern media notification with seek bar support
- * - Thread safety with AtomicBoolean and AtomicInteger
- * - Memory leak prevention with proper cleanup
- * - LRU cache for stream data
- * - Better error handling and retry logic
- * - Support for both mobile and Android TV
+ * Refactored PlayerService with RxJava for stream extraction.
  */
 public class PlayerService extends Service {
 
@@ -67,13 +61,11 @@ public class PlayerService extends Service {
     private static final int QUALITY_CHANGE_DELAY_MS = 500;
     
     private final AtomicBoolean isLoadingStream = new AtomicBoolean(false);
-    private final AtomicInteger retryCount = new AtomicInteger(0);
     private final AtomicBoolean isForeground = new AtomicBoolean(false);
     
     private ExoPlayer exoPlayer;
     private DefaultTrackSelector trackSelector;
     private PlayQueue playQueue;
-    private StreamInfoExtractor streamInfoExtractor;
     private PlayerNotificationManager notificationManager;
     
     private final LruCache<String, StreamData> streamCache = 
@@ -84,6 +76,9 @@ public class PlayerService extends Service {
     
     private String qualityPreference = "720p";
     
+    // RxJava সাবস্ক্রিপশন ম্যানেজ করার জন্য
+    private final CompositeDisposable compositeDisposable = new CompositeDisposable();
+
     private final CopyOnWriteArrayList<PlaybackStateListener> playbackListeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<MetadataListener> metadataListeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<QueueListener> queueListeners = new CopyOnWriteArrayList<>();
@@ -236,8 +231,6 @@ public class PlayerService extends Service {
         initializePlayer();
         initializeNotificationManager();
         setupPlayerListeners();
-        
-        streamInfoExtractor = StreamInfoExtractor.getInstance();
     }
     
     private void initializePlayer() {
@@ -404,7 +397,6 @@ public class PlayerService extends Service {
         PlayQueueItem item = playQueue.getItem();
         String itemUrl = item.getUrl();
         Log.d(TAG, "Playing item: " + item.getTitle() + " [" + itemUrl + "]");
-        retryCount.set(0);
         notifyCurrentItemChanged(item);
         
         updateNotificationMetadata(item);
@@ -418,67 +410,68 @@ public class PlayerService extends Service {
     }
 
     private void extractAndPlay(String videoUrl) {
-        isLoadingStream.set(true);
-        notifyLoadingStarted("Extracting stream information...");
-
-        streamInfoExtractor.extractStreamInfo(videoUrl, new StreamInfoCallback() {
-            @Override
-            public void onLoading() {
-                Log.d(TAG, "Stream extraction in progress for " + videoUrl);
-                notifyLoadingProgress("Loading stream data...");
-            }
-
-            @Override
-            public void onSuccess(StreamInfo streamInfo) {
-                isLoadingStream.set(false);
-                StreamData streamData = new StreamData(streamInfo);
-                streamData.selectQuality(qualityPreference);
-                
-                streamCache.put(videoUrl, streamData);
-                
-                notifyLoadingFinished();
-                notifyMetadataLoaded(streamInfo);
-                
-                List<String> qualities = getAvailableQualities();
-                if (qualities != null) {
-                    notifyAvailableQualitiesChanged(qualities);
-                }
-
-                if (!streamData.hasValidStreams()) {
-                    Log.e(TAG, "No valid streams found for " + videoUrl);
-                    String errorMsg = "No playable streams available";
-                    notifyStreamExtractionError(errorMsg, new IllegalStateException(errorMsg));
-                    notifyMetadataError(errorMsg);
-                    
-                    if (playQueue.getIndex() < playQueue.size() - 1) {
-                        handler.postDelayed(PlayerService.this::handleNextAction, 1500);
-                    }
-                } else {
-                    playWithStreamData(streamData);
-                }
-            }
-
-            @Override
-            public void onError(Exception error) {
-                Log.e(TAG, "Error extracting stream info", error);
-                
-                if (retryCount.incrementAndGet() <= MAX_RETRIES) {
-                    Log.d(TAG, "Retrying extraction... Attempt " + retryCount.get());
-                    notifyLoadingProgress("Retrying... Attempt " + retryCount.get());
-                    handler.postDelayed(() -> extractAndPlay(videoUrl), 2000);
-                } else {
+        Disposable disposable = RxStreamInfoExtractor.extract(videoUrl)
+                .retryWhen(errors -> {
+                    AtomicInteger counter = new AtomicInteger();
+                    return errors.flatMap(error -> {
+                        if (counter.incrementAndGet() > MAX_RETRIES) {
+                            return Flowable.error(error);
+                        }
+                        Log.d(TAG, "Retrying extraction... Attempt " + counter.get());
+                        notifyLoadingProgress("Retrying... Attempt " + counter.get());
+                        return Flowable.timer(2, TimeUnit.SECONDS);
+                    });
+                })
+                .doOnSubscribe(d -> {
+                    isLoadingStream.set(true);
+                    notifyLoadingStarted("Extracting stream information...");
+                })
+                .doFinally(() -> {
                     isLoadingStream.set(false);
-                    String errorMsg = "Failed to load stream: " + error.getMessage();
-                    notifyStreamExtractionError(errorMsg, error);
-                    notifyMetadataError(errorMsg);
                     notifyLoadingFinished();
-                    
-                    if (playQueue.getIndex() < playQueue.size() - 1) {
-                        handler.postDelayed(PlayerService.this::handleNextAction, 1500);
-                    }
-                }
-            }
-        });
+                })
+                .subscribe(
+                        // onSuccess
+                        streamInfo -> {
+                            StreamData streamData = new StreamData(streamInfo);
+                            streamData.selectQuality(qualityPreference);
+                            
+                            streamCache.put(videoUrl, streamData);
+                            
+                            notifyMetadataLoaded(streamInfo);
+                            
+                            List<String> qualities = getAvailableQualities();
+                            if (qualities != null) {
+                                notifyAvailableQualitiesChanged(qualities);
+                            }
+
+                            if (!streamData.hasValidStreams()) {
+                                Log.e(TAG, "No valid streams found for " + videoUrl);
+                                String errorMsg = "No playable streams available";
+                                notifyStreamExtractionError(errorMsg, new IllegalStateException(errorMsg));
+                                notifyMetadataError(errorMsg);
+                                
+                                if (playQueue.getIndex() < playQueue.size() - 1) {
+                                    handler.postDelayed(this::handleNextAction, 1500);
+                                }
+                            } else {
+                                playWithStreamData(streamData);
+                            }
+                        },
+                        // onError
+                        error -> {
+                            Log.e(TAG, "Error extracting stream info after retries", error);
+                            String errorMsg = "Failed to load stream: " + error.getMessage();
+                            notifyStreamExtractionError(errorMsg, (Exception) error);
+                            notifyMetadataError(errorMsg);
+                            
+                            if (playQueue.getIndex() < playQueue.size() - 1) {
+                                handler.postDelayed(this::handleNextAction, 1500);
+                            }
+                        }
+                );
+        
+        compositeDisposable.add(disposable);
     }
 
     private void playWithStreamData(StreamData streamData) {
@@ -583,7 +576,6 @@ public class PlayerService extends Service {
             Log.d(TAG, "Seeking to position: " + position);
             exoPlayer.seekTo(position);
             
-            // Immediately update notification
             if (notificationManager != null) {
                 notificationManager.updatePosition(position);
             }
@@ -738,6 +730,9 @@ public class PlayerService extends Service {
         
         stopForegroundService();
         
+        // সমস্ত RxJava সাবস্ক্রিপশন বাতিল করা হচ্ছে
+        compositeDisposable.clear();
+        
         handler.removeCallbacks(positionUpdateRunnable);
         handler.removeCallbacksAndMessages(null);
         
@@ -760,12 +755,6 @@ public class PlayerService extends Service {
         }
         
         trackSelector = null;
-        
-        if (streamInfoExtractor != null) {
-            streamInfoExtractor.shutdown();
-            streamInfoExtractor = null;
-        }
-        
         streamCache.evictAll();
         playQueue = null;
         
