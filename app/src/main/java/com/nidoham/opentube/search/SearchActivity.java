@@ -16,14 +16,14 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.snackbar.Snackbar;
-import com.nidoham.flowtube.player.playqueue.PlayQueueItem;
-import com.nidoham.flowtube.player.playqueue.SimplePlayQueue;
 import com.nidoham.opentube.databinding.ActivitySearchBinding;
 import com.nidoham.opentube.player.PlayerActivity;
 // --- Change 1: Import the new RxJava-based services ---
 import com.nidoham.stream.data.SearchService;
 import com.nidoham.stream.data.SearchSuggestionService;
 
+import com.nidoham.stream.player.playqueue.PlayQueue;
+import com.nidoham.stream.player.playqueue.PlayQueueItem;
 import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 
@@ -269,10 +269,18 @@ public class SearchActivity extends AppCompatActivity {
 
     private void onSearchResultClicked(StreamInfoItem streamInfo) {
         try {
+            // Create a PlayQueueItem from your stream information
             PlayQueueItem item = PlayQueueItem.from(streamInfo);
+
+            // Create a list to hold the item(s) for the queue
             List<PlayQueueItem> itemList = new ArrayList<>();
             itemList.add(item);
-            SimplePlayQueue queue = new SimplePlayQueue(false, 0, itemList);
+
+            // Use the new PlayQueue class instead of SimplePlayQueue
+            // The 'complete' flag is now the 'repeatEnabled' flag at the end of the constructor.
+            PlayQueue queue = new PlayQueue(0, itemList, false);
+
+            // Create the intent and pass the new PlayQueue object
             Intent intent = new Intent(this, PlayerActivity.class);
             intent.putExtra("queue", queue);
             startActivity(intent);

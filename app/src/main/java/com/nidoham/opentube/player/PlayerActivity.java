@@ -39,8 +39,6 @@ import androidx.media3.ui.PlayerView;
 import androidx.media3.ui.TimeBar;
 
 import com.bumptech.glide.Glide;
-import com.nidoham.flowtube.player.playqueue.PlayQueue;
-import com.nidoham.flowtube.player.playqueue.PlayQueueItem;
 import com.nidoham.newpipe.image.ThumbnailExtractor;
 import com.nidoham.opentube.R;
 import com.nidoham.opentube.databinding.ActivityPlayerBinding;
@@ -49,6 +47,8 @@ import com.nidoham.opentube.databinding.IncludeMetadataBinding;
 import com.nidoham.opentube.databinding.IncludePlayerControlsBinding;
 import com.nidoham.opentube.util.constant.PlayerConstants;
 
+import com.nidoham.stream.player.playqueue.PlayQueue;
+import com.nidoham.stream.player.playqueue.PlayQueueItem;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 
 import java.io.ByteArrayInputStream;

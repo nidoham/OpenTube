@@ -12,9 +12,11 @@ import androidx.appcompat.app.AppCompatActivity;
 // নতুন RxStreamInfoExtractor ক্লাস ইমপোর্ট করা হয়েছে
 import com.nidoham.stream.data.RxStreamInfoExtractor;
 
-import com.nidoham.flowtube.player.media.StreamSelector;
-import com.nidoham.flowtube.player.media.StreamSelector.QualityOption;
 import com.nidoham.opentube.databinding.ActivityExperimentBinding;
+
+import com.nidoham.stream.stream.StreamSelector;
+import com.nidoham.stream.stream.StreamSelector.QualityOption;
+
 
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;

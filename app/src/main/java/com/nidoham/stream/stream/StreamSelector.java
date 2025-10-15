@@ -1,4 +1,4 @@
-package com.nidoham.flowtube.player.media;
+package com.nidoham.stream.stream;
 
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;

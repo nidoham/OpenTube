@@ -4,10 +4,9 @@ import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
 
-import com.nidoham.flowtube.player.playqueue.PlayQueue;
-import com.nidoham.flowtube.player.playqueue.PlayQueueItem;
-
 import com.nidoham.newpipe.image.ThumbnailExtractor;
+import com.nidoham.stream.player.playqueue.PlayQueue;
+import com.nidoham.stream.player.playqueue.PlayQueueItem;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 
 import java.util.List;

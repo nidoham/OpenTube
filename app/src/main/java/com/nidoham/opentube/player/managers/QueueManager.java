@@ -5,9 +5,9 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.nidoham.flowtube.player.playqueue.PlayQueue;
-import com.nidoham.flowtube.player.playqueue.PlayQueueItem;
 
+import com.nidoham.stream.player.playqueue.PlayQueue;
+import com.nidoham.stream.player.playqueue.PlayQueueItem;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**

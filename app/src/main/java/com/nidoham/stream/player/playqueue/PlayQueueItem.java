@@ -1,4 +1,4 @@
-package com.nidoham.flowtube.player.playqueue;
+package com.nidoham.stream.player.playqueue;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
