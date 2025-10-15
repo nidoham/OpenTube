@@ -48,6 +48,13 @@ public final class PlayerConstants {
     public static final String ACTION_PREVIOUS = BASE_PACKAGE + ".ACTION_PREVIOUS";
     
     /**
+     * মন্তব্যঃ Video এর নির্দিষ্ট position এ seek করার action
+     * এই action টি notification এর seek bar থেকে trigger হয়
+     * এবং EXTRA_SEEK_POSITION এর মাধ্যমে target position পাঠানো হয়
+     */
+    public static final String ACTION_SEEK = BASE_PACKAGE + ".ACTION_SEEK";
+    
+    /**
      * মন্তব্যঃ Video quality পরিবর্তন করার action
      */
     public static final String ACTION_CHANGE_QUALITY = BASE_PACKAGE + ".ACTION_CHANGE_QUALITY";
@@ -75,6 +82,12 @@ public final class PlayerConstants {
      * মন্তব্যঃ Selected quality ID পাঠানোর key
      */
     public static final String EXTRA_QUALITY_ID = "extra_quality_id";
+    
+    /**
+     * মন্তব্যঃ Seek operation এর target position (milliseconds এ)
+     * ACTION_SEEK এর সাথে ব্যবহৃত হয়
+     */
+    public static final String EXTRA_SEEK_POSITION = "extra_seek_position";
     
     // ═══════════════════════════════════════════════════════════════
     // Broadcast Actions এবং Extras - Service থেকে UI তে update পাঠানোর জন্য

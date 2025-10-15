@@ -1,25 +1,17 @@
 package com.nidoham.opentube.player;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.os.Binder;
-import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.support.v4.media.session.MediaSessionCompat;
-import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.Log;
 import android.util.LruCache;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.core.app.NotificationCompat;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
@@ -39,6 +31,7 @@ import com.nidoham.flowtube.player.playqueue.PlayQueueItem;
 import com.nidoham.flowtube.player.streams.StreamInfoCallback;
 import com.nidoham.flowtube.player.streams.StreamInfoExtractor;
 import com.nidoham.opentube.R;
+import com.nidoham.opentube.player.managers.PlayerNotificationManager;
 import com.nidoham.opentube.util.constant.PlayerConstants;
 
 import org.schabi.newpipe.extractor.stream.AudioStream;
@@ -57,13 +50,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Refactored PlayerService with all improvements applied:
+ * Refactored PlayerService with PlayerNotificationManager integration:
+ * - Modern media notification with seek bar support
  * - Thread safety with AtomicBoolean and AtomicInteger
  * - Memory leak prevention with proper cleanup
- * - Enhanced notification with MediaStyle and seek bar
  * - LRU cache for stream data
  * - Better error handling and retry logic
- * - Audio focus management
  * - Support for both mobile and Android TV
  */
 public class PlayerService extends Service {
@@ -78,12 +70,11 @@ public class PlayerService extends Service {
     private final AtomicInteger retryCount = new AtomicInteger(0);
     private final AtomicBoolean isForeground = new AtomicBoolean(false);
     
-    // Core components
     private ExoPlayer exoPlayer;
     private DefaultTrackSelector trackSelector;
     private PlayQueue playQueue;
     private StreamInfoExtractor streamInfoExtractor;
-    private MediaSessionCompat mediaSession;
+    private PlayerNotificationManager notificationManager;
     
     private final LruCache<String, StreamData> streamCache = 
         new LruCache<>(MAX_CACHE_SIZE);
@@ -109,7 +100,10 @@ public class PlayerService extends Service {
                 
                 if (duration > 0) {
                     notifyPositionUpdate(position, duration);
-                    updateNotification();
+                    
+                    if (notificationManager != null) {
+                        notificationManager.updatePosition(position);
+                    }
                 }
             }
             handler.postDelayed(this, POSITION_UPDATE_INTERVAL_MS);
@@ -240,9 +234,8 @@ public class PlayerService extends Service {
         Log.d(TAG, "PlayerService onCreate");
 
         initializePlayer();
-        initializeMediaSession();
+        initializeNotificationManager();
         setupPlayerListeners();
-        createNotificationChannel();
         
         streamInfoExtractor = StreamInfoExtractor.getInstance();
     }
@@ -273,44 +266,8 @@ public class PlayerService extends Service {
                 .build();
     }
     
-    private void initializeMediaSession() {
-        mediaSession = new MediaSessionCompat(this, TAG);
-        mediaSession.setFlags(
-            MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
-            MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-        );
-        mediaSession.setCallback(new MediaSessionCompat.Callback() {
-            @Override
-            public void onPlay() {
-                if (exoPlayer != null) exoPlayer.play();
-            }
-
-            @Override
-            public void onPause() {
-                if (exoPlayer != null) exoPlayer.pause();
-            }
-
-            @Override
-            public void onSkipToNext() {
-                handleNextAction();
-            }
-
-            @Override
-            public void onSkipToPrevious() {
-                handlePreviousAction();
-            }
-
-            @Override
-            public void onSeekTo(long pos) {
-                if (exoPlayer != null) exoPlayer.seekTo(pos);
-            }
-
-            @Override
-            public void onStop() {
-                handleStopAction();
-            }
-        });
-        mediaSession.setActive(true);
+    private void initializeNotificationManager() {
+        notificationManager = new PlayerNotificationManager(this);
     }
 
     private void setupPlayerListeners() {
@@ -318,8 +275,7 @@ public class PlayerService extends Service {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
                 Log.d(TAG, "Playback state changed: " + playbackState);
-                updateNotification();
-                updateMediaSession();
+                updateNotificationState();
                 notifyPlaybackStateChanged();
                 
                 if (playbackState == Player.STATE_ENDED) {
@@ -332,8 +288,7 @@ public class PlayerService extends Service {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 Log.d(TAG, "Is playing changed: " + isPlaying);
-                updateNotification();
-                updateMediaSession();
+                updateNotificationState();
                 notifyPlaybackStateChanged();
                 
                 if (isPlaying) {
@@ -355,30 +310,11 @@ public class PlayerService extends Service {
             }
         });
     }
-    
-    private void updateMediaSession() {
-        if (mediaSession == null || exoPlayer == null) return;
-        
-        int state = exoPlayer.isPlaying() ? 
-            PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED;
-        
-        PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
-            .setActions(
-                PlaybackStateCompat.ACTION_PLAY |
-                PlaybackStateCompat.ACTION_PAUSE |
-                PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
-                PlaybackStateCompat.ACTION_SEEK_TO
-            )
-            .setState(state, exoPlayer.getCurrentPosition(), 1.0f);
-        
-        mediaSession.setPlaybackState(stateBuilder.build());
-    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || intent.getAction() == null) {
-            return START_STICKY; // Changed from START_NOT_STICKY for media playback
+            return START_STICKY;
         }
 
         String action = intent.getAction();
@@ -400,6 +336,9 @@ public class PlayerService extends Service {
             case PlayerConstants.ACTION_PREVIOUS:
                 handlePreviousAction();
                 break;
+            case PlayerConstants.ACTION_SEEK:
+                handleSeekAction(intent);
+                break;
             case PlayerConstants.ACTION_CHANGE_QUALITY:
                 handleChangeQuality(intent);
                 break;
@@ -407,12 +346,9 @@ public class PlayerService extends Service {
                 Log.w(TAG, "Unknown action: " + action);
         }
 
-        return START_STICKY; // Changed for media playback
+        return START_STICKY;
     }
 
-    /**
-     * Handle play action with queue
-     */
     private void handlePlayAction(Intent intent) {
         byte[] queueBytes = intent.getByteArrayExtra(PlayerConstants.EXTRA_PLAY_QUEUE);
         if (queueBytes == null) {
@@ -432,25 +368,26 @@ public class PlayerService extends Service {
         playCurrentItem();
     }
     
-    /**
-     * Improved foreground service management
-     * Start foreground service with notification
-     */
     private void startForegroundService() {
         if (isForeground.getAndSet(true)) {
             return;
         }
         
-        startForeground(PlayerConstants.NOTIFICATION_ID, createNotification());
+        if (notificationManager != null) {
+            startForeground(PlayerConstants.NOTIFICATION_ID, notificationManager.getNotification());
+            notificationManager.showNotification();
+        }
+        
         Log.d(TAG, "Started foreground service");
     }
     
-    /**
-     * Stop foreground service
-     */
     private void stopForegroundService() {
         if (!isForeground.getAndSet(false)) {
             return;
+        }
+        
+        if (notificationManager != null) {
+            notificationManager.cancelNotification();
         }
         
         stopForeground(true);
@@ -458,9 +395,6 @@ public class PlayerService extends Service {
         Log.d(TAG, "Stopped foreground service");
     }
 
-    /**
-     * Play current item from queue
-     */
     private void playCurrentItem() {
         if (playQueue == null || playQueue.isEmpty() || playQueue.getItem() == null) {
             notifyPlaybackError("No item to play", new IllegalStateException("No item to play"));
@@ -472,6 +406,8 @@ public class PlayerService extends Service {
         Log.d(TAG, "Playing item: " + item.getTitle() + " [" + itemUrl + "]");
         retryCount.set(0);
         notifyCurrentItemChanged(item);
+        
+        updateNotificationMetadata(item);
 
         StreamData cachedData = streamCache.get(itemUrl);
         if (cachedData != null && cachedData.hasValidStreams()) {
@@ -545,9 +481,6 @@ public class PlayerService extends Service {
         });
     }
 
-    /**
-     * Play with extracted stream data
-     */
     private void playWithStreamData(StreamData streamData) {
         if (!streamData.hasValidStreams()) {
             return;
@@ -610,9 +543,6 @@ public class PlayerService extends Service {
         }
     }
 
-    /**
-     * Handle pause/play toggle
-     */
     private void handlePauseAction() {
         if (exoPlayer == null) return;
         if (exoPlayer.isPlaying()) {
@@ -622,9 +552,6 @@ public class PlayerService extends Service {
         }
     }
 
-    /**
-     * Handle stop action
-     */
     private void handleStopAction() {
         if (exoPlayer != null) {
             exoPlayer.stop();
@@ -634,9 +561,6 @@ public class PlayerService extends Service {
         stopSelf();
     }
 
-    /**
-     * Handle next action
-     */
     private void handleNextAction() {
         if (playQueue != null && (playQueue.getIndex() < playQueue.size() - 1)) {
             playQueue.next();
@@ -645,14 +569,24 @@ public class PlayerService extends Service {
         }
     }
 
-    /**
-     * Handle previous action
-     */
     private void handlePreviousAction() {
         if (playQueue != null && playQueue.getIndex() > 0) {
             playQueue.previous();
             notifyQueueChanged();
             playCurrentItem();
+        }
+    }
+    
+    private void handleSeekAction(Intent intent) {
+        long position = intent.getLongExtra(PlayerConstants.EXTRA_SEEK_POSITION, -1);
+        if (position >= 0 && exoPlayer != null) {
+            Log.d(TAG, "Seeking to position: " + position);
+            exoPlayer.seekTo(position);
+            
+            // Immediately update notification
+            if (notificationManager != null) {
+                notificationManager.updatePosition(position);
+            }
         }
     }
 
@@ -669,9 +603,6 @@ public class PlayerService extends Service {
         }
     }
 
-    /**
-     * Handle quality change
-     */
     private void handleChangeQuality(Intent intent) {
         String newQuality = intent.getStringExtra(PlayerConstants.EXTRA_QUALITY_ID);
         handleChangeQualityInternal(newQuality);
@@ -716,130 +647,26 @@ public class PlayerService extends Service {
         }
     }
 
-    /**
-     * Create notification channel for Android O+
-     */
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    PlayerConstants.CHANNEL_ID,
-                    PlayerConstants.CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("Media playback controls");
-            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-            channel.setShowBadge(false);
-            
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(channel);
-            }
-        }
-    }
-
-    /**
-     * Enhanced notification with MediaStyle and seek bar support
-     * Create the foreground service notification
-     */
-    private Notification createNotification() {
-        String title = "Loading...";
-        String artist = "OpenTube";
+    private void updateNotificationMetadata(PlayQueueItem item) {
+        if (notificationManager == null || item == null) return;
+        
+        String title = item.getTitle();
+        String artist = item.getUploader();
         Bitmap artwork = null;
         
-        if (playQueue != null && playQueue.getItem() != null) {
-            title = playQueue.getItem().getTitle();
-            artist = playQueue.getItem().getUploader();
-            // TODO: Load artwork bitmap from thumbnail URL
-        }
-
-        int playPauseIcon = (exoPlayer != null && exoPlayer.isPlaying())
-                ? R.drawable.ic_pause
-                : R.drawable.ic_play_arrow;
-
-        Intent activityIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
-        if (activityIntent == null) {
-            activityIntent = new Intent();
-        }
-        PendingIntent contentIntent = PendingIntent.getActivity(this, 0, activityIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-        androidx.media.app.NotificationCompat.MediaStyle mediaStyle = 
-            new androidx.media.app.NotificationCompat.MediaStyle()
-                .setMediaSession(mediaSession.getSessionToken())
-                .setShowActionsInCompactView(0, 1, 2)
-                .setShowCancelButton(true)
-                .setCancelButtonIntent(createServiceIntent(PlayerConstants.ACTION_STOP, 4));
-
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, PlayerConstants.CHANNEL_ID)
-                .setContentTitle(title)
-                .setContentText(artist)
-                .setSubText("OpenTube")
-                .setSmallIcon(R.drawable.ic_play_arrow)
-                .setContentIntent(contentIntent)
-                .setDeleteIntent(createServiceIntent(PlayerConstants.ACTION_STOP, 5))
-                .addAction(R.drawable.ic_skip_previous, "Previous", 
-                    createServiceIntent(PlayerConstants.ACTION_PREVIOUS, 2))
-                .addAction(playPauseIcon, "Play/Pause", 
-                    createServiceIntent(PlayerConstants.ACTION_PAUSE, 1))
-                .addAction(R.drawable.ic_skip_next, "Next", 
-                    createServiceIntent(PlayerConstants.ACTION_NEXT, 3))
-                .addAction(R.drawable.ic_close, "Close", 
-                    createServiceIntent(PlayerConstants.ACTION_STOP, 4))
-                .setStyle(mediaStyle)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false);
-        
-        if (artwork != null) {
-            builder.setLargeIcon(artwork);
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (exoPlayer != null && exoPlayer.getDuration() > 0) {
-                builder.setProgress(
-                    (int) exoPlayer.getDuration(),
-                    (int) exoPlayer.getCurrentPosition(),
-                    false
-                );
-            }
-        }
-        
-        return builder.build();
-    }
-
-    /**
-     * Helper method to create PendingIntents for service actions.
-     */
-    private PendingIntent createServiceIntent(String action, int requestCode) {
-        Intent intent = new Intent(this, PlayerService.class);
-        intent.setAction(action);
-        return PendingIntent.getService(this, requestCode, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-    }
-
-    /**
-     * Update the foreground notification
-     */
-    private void updateNotification() {
-        if (!isForeground.get()) return;
-        
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager != null) {
-            manager.notify(PlayerConstants.NOTIFICATION_ID, createNotification());
-        }
+        notificationManager.updateMetadata(title, artist, artwork);
     }
     
-    /**
-     * Update notification metadata
-     */
-    private void updateNotificationMetadata(PlayQueueItem item) {
-        // This method is now redundant as notification is created/updated directly in createNotification() and updateNotification()
-        // Keeping it for now in case it's used elsewhere indirectly.
+    private void updateNotificationState() {
+        if (notificationManager == null || exoPlayer == null) return;
+        
+        boolean isPlaying = exoPlayer.isPlaying();
+        long position = exoPlayer.getCurrentPosition();
+        long duration = exoPlayer.getDuration();
+        
+        notificationManager.updatePlaybackState(isPlaying, position, duration);
     }
     
-    // Public API methods
     @Nullable
     public ExoPlayer getPlayer() {
         return exoPlayer;
@@ -892,7 +719,6 @@ public class PlayerService extends Service {
         }
     }
     
-    // Serialization helpers
     @Nullable
     private <T extends Serializable> T deserializeObject(byte[] bytes) {
         if (bytes == null) return null;
@@ -910,14 +736,11 @@ public class PlayerService extends Service {
         super.onDestroy();
         Log.d(TAG, "PlayerService onDestroy");
         
-        // Stop foreground service
         stopForegroundService();
         
-        // Clean up handler callbacks
         handler.removeCallbacks(positionUpdateRunnable);
         handler.removeCallbacksAndMessages(null);
         
-        // Clear all listeners
         playbackListeners.clear();
         metadataListeners.clear();
         queueListeners.clear();
@@ -925,33 +748,25 @@ public class PlayerService extends Service {
         loadingListeners.clear();
         qualityListeners.clear();
         
-        // Release MediaSession
-        if (mediaSession != null) {
-            mediaSession.setActive(false);
-            mediaSession.release();
-            mediaSession = null;
+        if (notificationManager != null) {
+            notificationManager.release();
+            notificationManager = null;
         }
         
-        // Release player resources
         if (exoPlayer != null) {
             exoPlayer.stop();
             exoPlayer.release();
             exoPlayer = null;
         }
         
-        // Release track selector
         trackSelector = null;
         
-        // Shutdown extractor
         if (streamInfoExtractor != null) {
             streamInfoExtractor.shutdown();
             streamInfoExtractor = null;
         }
         
-        // Clear cache
         streamCache.evictAll();
-        
-        // Clear queue
         playQueue = null;
         
         Log.d(TAG, "PlayerService destroyed and cleaned up");
@@ -964,7 +779,7 @@ public class PlayerService extends Service {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Listener Notification Methods
+    // Listener Management Methods
     // ═══════════════════════════════════════════════════════════════
     
     public void addPlaybackStateListener(PlaybackStateListener listener) {
