@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="68dp"
+    android:viewportWidth="120"
+    android:viewportHeight="68">
+
+    <!-- ব্যাকগ্রাউন্ড রেকটেঙ্গল -->
+    <path
+        android:fillColor="#333333"
+        android:pathData="M0,0h120v68h-120z"/>
+
+    <!-- প্লে আইকন -->
+    <path
+        android:fillColor="#666666"
+        android:pathData="M45,25l20,9 -20,9z"/>
+</vector>

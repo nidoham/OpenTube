@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GridLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     android:layout_height="wrap_content"
+     android:layout_width="250dp"
+     android:columnOrderPreserved="false"
+     android:background="@drawable/option_item_bg"
+     android:elevation="8dp"
+     android:padding="8dp"
+     android:alignmentMode="alignMargins"
+     android:layout_marginTop="20dp"
+     android:layout_gravity="top|end"
+     android:columnCount="3">
+
+    <LinearLayout
+         android:layout_height="wrap_content"
+         android:layout_width="0dp"
+         android:gravity="center"
+         android:background="?attr/selectableItemBackground"
+         android:clickable="true"
+         android:padding="8dp"
+         android:orientation="vertical"
+         android:layout_columnWeight="1"
+         android:focusable="true"
+         android:id="@+id/optionScreenScale">
+
+        <ImageView
+             android:layout_height="24dp"
+             android:layout_width="24dp"
+             android:src="@android:drawable/ic_menu_crop"
+             android:tint="@android:color/white" />
+
+        <TextView
+             android:layout_height="wrap_content"
+             android:layout_width="wrap_content"
+             android:gravity="center"
+             android:ellipsize="end"
+             android:textSize="10sp"
+             android:textColor="@android:color/white"
+             android:layout_marginTop="4dp"
+             android:maxLines="2"
+             android:text="Screen Scale" />
+
+    </LinearLayout>
+
+    <LinearLayout
+         android:layout_height="wrap_content"
+         android:layout_width="0dp"
+         android:gravity="center"
+         android:background="?attr/selectableItemBackground"
+         android:clickable="true"
+         android:padding="8dp"
+         android:orientation="vertical"
+         android:layout_columnWeight="1"
+         android:focusable="true"
+         android:id="@+id/optionPlaySpeed">
+
+        <ImageView
+             android:layout_height="24dp"
+             android:layout_width="24dp"
+             android:src="@android:drawable/ic_media_ff"
+             android:tint="@android:color/white" />
+
+        <TextView
+             android:layout_height="wrap_content"
+             android:layout_width="wrap_content"
+             android:gravity="center"
+             android:ellipsize="end"
+             android:textSize="10sp"
+             android:textColor="@android:color/white"
+             android:layout_marginTop="4dp"
+             android:maxLines="2"
+             android:text="Play Speed" />
+
+    </LinearLayout>
+
+    <LinearLayout
+         android:layout_height="wrap_content"
+         android:layout_width="0dp"
+         android:gravity="center"
+         android:background="?attr/selectableItemBackground"
+         android:clickable="true"
+         android:padding="8dp"
+         android:orientation="vertical"
+         android:layout_columnWeight="1"
+         android:focusable="true"
+         android:id="@+id/optionQualityChange">
+
+        <ImageView
+             android:layout_height="24dp"
+             android:layout_width="24dp"
+             android:src="@drawable/ic_hd"
+             android:tint="@android:color/white" />
+
+        <TextView
+             android:layout_height="wrap_content"
+             android:layout_width="wrap_content"
+             android:gravity="center"
+             android:ellipsize="end"
+             android:textSize="10sp"
+             android:textColor="@android:color/white"
+             android:layout_marginTop="4dp"
+             android:maxLines="2"
+             android:text="Quality" />
+
+    </LinearLayout>
+
+</GridLayout>

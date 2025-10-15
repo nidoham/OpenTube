@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LinearLayout
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	android:id="@+id/rootLayout"
+	android:layout_width="match_parent"
+	android:layout_height="match_parent"
+	android:orientation="vertical"
+	android:padding="16dp">
+
+	<!-- URL Input Section -->
+	<com.google.android.material.card.MaterialCardView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginBottom="16dp"
+		app:cardElevation="2dp"
+		app:cardCornerRadius="8dp">
+
+		<LinearLayout
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:orientation="vertical"
+			android:padding="12dp">
+
+			<com.google.android.material.textfield.TextInputLayout
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:hint="YouTube URL or Keywords"
+				style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+				<com.google.android.material.textfield.TextInputEditText
+					android:id="@+id/edit_text_youtube_url"
+					android:layout_width="match_parent"
+					android:layout_height="wrap_content"
+					android:imeOptions="actionDone"
+					android:inputType="text"/>
+
+			</com.google.android.material.textfield.TextInputLayout>
+
+			<Button
+				android:id="@+id/button_load_stream"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:layout_marginTop="8dp"
+				android:text="Load Stream"/>
+
+		</LinearLayout>
+
+	</com.google.android.material.card.MaterialCardView>
+
+	<!-- Quality Selection Section -->
+	<com.google.android.material.card.MaterialCardView
+		android:id="@+id/qualityCard"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginBottom="16dp"
+		android:visibility="gone"
+		app:cardElevation="2dp"
+		app:cardCornerRadius="8dp">
+
+		<LinearLayout
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:orientation="vertical"
+			android:padding="12dp">
+
+			<TextView
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:text="Video Quality"
+				android:textStyle="bold"
+				android:textSize="14sp"
+				android:layout_marginBottom="8dp"/>
+
+			<Spinner
+				android:id="@+id/spinnerVideoQuality"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:minHeight="48dp"
+				android:layout_marginBottom="16dp"/>
+
+			<TextView
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:text="Audio Quality"
+				android:textStyle="bold"
+				android:textSize="14sp"
+				android:layout_marginBottom="8dp"/>
+
+			<Spinner
+				android:id="@+id/spinnerAudioQuality"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:minHeight="48dp"
+				android:layout_marginBottom="16dp"/>
+
+			<LinearLayout
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:orientation="horizontal"
+				android:gravity="end">
+
+				<Button
+					android:id="@+id/button_play"
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:text="Play"
+					android:layout_marginEnd="8dp"
+					style="@style/Widget.MaterialComponents.Button"/>
+
+				<Button
+					android:id="@+id/button_download"
+					android:layout_width="wrap_content"
+					android:layout_height="wrap_content"
+					android:text="Download"
+					style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+			</LinearLayout>
+
+		</LinearLayout>
+
+	</com.google.android.material.card.MaterialCardView>
+
+	<!-- Stream Info Section -->
+	<TextView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:text="Stream Information"
+		android:textStyle="bold"
+		android:textSize="14sp"
+		android:layout_marginBottom="8dp"/>
+
+	<androidx.core.widget.NestedScrollView
+		android:layout_width="match_parent"
+		android:layout_height="0dp"
+		android:layout_weight="1">
+
+		<com.google.android.material.card.MaterialCardView
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			app:cardElevation="2dp"
+			app:cardCornerRadius="8dp">
+
+			<TextView
+				android:id="@+id/streamInfoTextView"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:padding="12dp"
+				android:textSize="14sp"
+				android:lineSpacingMultiplier="1.3"
+				android:textIsSelectable="true"
+				android:fontFamily="monospace"
+				android:text="Load a stream to see information..."/>
+
+		</com.google.android.material.card.MaterialCardView>
+
+	</androidx.core.widget.NestedScrollView>
+
+</LinearLayout>

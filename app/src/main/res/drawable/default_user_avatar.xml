@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <!-- Fixed circle using proper path instead of invalid cx/cy/r attributes -->
+    <path
+        android:fillColor="#666666"
+        android:pathData="M16,16m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16,6c2.21,0 4,1.79 4,4s-1.79,4 -4,4 -4,-1.79 -4,-4 1.79,-4 4,-4zM16,20c2.94,0 5.33,1.19 5.33,2.67V26H10.67v-3.33c0,-1.48 2.39,-2.67 5.33,-2.67z"/>
+</vector>

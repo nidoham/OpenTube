@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="400dp"
+    android:height="200dp"
+    android:viewportWidth="400"
+    android:viewportHeight="200">
+
+    <!-- ব্যাকগ্রাউন্ড লাল রেকটেঙ্গল -->
+    <path
+        android:fillColor="#FF4444"
+        android:pathData="M0,0h400v200h-400z"/>
+
+    <!-- সাদা মোটা বার -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,90h300v20h-300z"/>
+
+    <!-- সাদা পাতলা বার -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M100,110h200v10h-200z"/>
+</vector>

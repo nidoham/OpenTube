@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:layout_height="match_parent"
+	android:layout_width="match_parent"
+	android:background="@color/md_theme_background">
+
+	<com.google.android.material.appbar.AppBarLayout
+		android:layout_height="wrap_content"
+		android:layout_width="0dp"
+		android:background="@color/seed"
+		app:layout_constraintTop_toTopOf="parent"
+		app:layout_constraintStart_toStartOf="parent"
+		app:elevation="4dp"
+		app:layout_constraintEnd_toEndOf="parent"
+		android:id="@+id/top_search_bar_layout">
+
+		<androidx.constraintlayout.widget.ConstraintLayout
+			android:layout_height="56dp"
+			android:layout_width="match_parent"
+			android:layout_marginTop="40dp"
+			android:paddingHorizontal="16dp"
+			android:id="@+id/top_search_bar">
+
+			<ImageButton
+				android:layout_height="40dp"
+				android:layout_width="40dp"
+				android:src="@drawable/ic_arrow_back_24"
+				android:contentDescription="Go back"
+				android:background="?attr/selectableItemBackgroundBorderless"
+				app:layout_constraintTop_toTopOf="parent"
+				app:tint="@android:color/white"
+				app:layout_constraintStart_toStartOf="parent"
+				app:layout_constraintBottom_toBottomOf="parent"
+				android:id="@+id/back_button"/>
+
+			<EditText
+				android:layout_height="40dp"
+				android:layout_width="0dp"
+				android:imeOptions="actionSearch"
+				android:singleLine="true"
+				android:textColor="@android:color/white"
+				app:layout_constraintStart_toEndOf="@+id/back_button"
+				app:layout_constraintEnd_toStartOf="@+id/search_button"
+				app:layout_constraintBottom_toBottomOf="parent"
+				android:background="@android:color/transparent"
+				android:hint="Search YouTube"
+				android:textAppearance="?attr/textAppearanceBodyLarge"
+				app:layout_constraintTop_toTopOf="parent"
+				android:layout_marginHorizontal="12dp"
+				android:textColorHint="#B3FFFFFF"
+				android:maxLines="1"
+				android:inputType="text"
+				android:id="@+id/search_edit_text"/>
+
+			<ImageButton
+				android:layout_height="40dp"
+				android:layout_width="40dp"
+				android:src="@drawable/ic_search_24"
+				android:contentDescription="Search"
+				android:background="?attr/selectableItemBackgroundBorderless"
+				app:layout_constraintTop_toTopOf="parent"
+				app:tint="@android:color/white"
+				app:layout_constraintEnd_toEndOf="parent"
+				app:layout_constraintBottom_toBottomOf="parent"
+				android:id="@+id/search_button"/>
+
+		</androidx.constraintlayout.widget.ConstraintLayout>
+
+	</com.google.android.material.appbar.AppBarLayout>
+
+	<com.google.android.material.card.MaterialCardView
+		android:layout_height="wrap_content"
+		android:layout_width="0dp"
+		android:visibility="gone"
+		app:cardElevation="0dp"
+		app:cardBackgroundColor="?attr/colorSurfaceVariant"
+		android:layout_marginTop="8dp"
+		app:layout_constraintTop_toBottomOf="@id/top_search_bar_layout"
+		tools:visibility="visible"
+		android:layout_marginHorizontal="16dp"
+		app:layout_constraintStart_toStartOf="parent"
+		app:layout_constraintEnd_toEndOf="parent"
+		app:cardCornerRadius="8dp"
+		android:id="@+id/correction_card">
+
+		<LinearLayout
+			android:layout_height="wrap_content"
+			android:layout_width="match_parent"
+			android:gravity="center_vertical"
+			android:background="?attr/selectableItemBackground"
+			android:padding="12dp"
+			android:orientation="horizontal">
+
+			<ImageView
+				android:layout_height="16dp"
+				android:layout_width="16dp"
+				android:layout_marginEnd="8dp"
+				android:src="@android:drawable/ic_menu_search"
+				app:tint="?attr/colorOnSurfaceVariant"/>
+
+			<com.google.android.material.textview.MaterialTextView
+				android:layout_height="wrap_content"
+				android:layout_width="0dp"
+				android:textAppearance="?attr/textAppearanceBodyMedium"
+				android:textColor="?attr/colorOnSurfaceVariant"
+				tools:text="Showing results for lorem ipsum"
+				android:layout_weight="1"
+				android:id="@+id/correct_suggestion"/>
+
+		</LinearLayout>
+
+	</com.google.android.material.card.MaterialCardView>
+
+	<androidx.recyclerview.widget.RecyclerView
+		android:layout_height="0dp"
+		android:layout_width="0dp"
+		android:clipToPadding="false"
+		android:layout_marginTop="8dp"
+		app:layout_constraintBottom_toBottomOf="parent"
+		app:layoutManager="LinearLayoutManager"
+		app:layout_constraintTop_toBottomOf="@id/correction_card"
+		android:scrollbars="vertical"
+		app:layout_constraintStart_toStartOf="parent"
+		android:paddingBottom="16dp"
+		tools:listitem="@layout/list_stream_item"
+		app:layout_constraintEnd_toEndOf="parent"
+		android:id="@+id/items_list"/>
+
+	<com.google.android.material.progressindicator.CircularProgressIndicator
+		android:layout_height="48dp"
+		android:layout_width="48dp"
+		android:visibility="gone"
+		android:indeterminate="true"
+		tools:visibility="visible"
+		app:trackColor="?attr/colorSurfaceVariant"
+		app:layout_constraintStart_toStartOf="parent"
+		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintBottom_toBottomOf="parent"
+		app:layout_constraintTop_toBottomOf="@id/top_search_bar_layout"
+		android:id="@+id/loading_progress_bar"
+		app:indicatorColor="?attr/colorPrimary"/>
+
+	<LinearLayout
+		android:layout_height="wrap_content"
+		android:layout_width="wrap_content"
+		android:visibility="gone"
+		android:gravity="center_horizontal"
+		tools:visibility="visible"
+		android:layout_margin="32dp"
+		android:orientation="vertical"
+		app:layout_constraintStart_toStartOf="parent"
+		app:layout_constraintEnd_toEndOf="parent"
+		app:layout_constraintBottom_toBottomOf="parent"
+		app:layout_constraintTop_toBottomOf="@id/top_search_bar_layout"
+		android:id="@+id/empty_state_view">
+
+		<ImageView
+			android:layout_height="80dp"
+			android:layout_width="80dp"
+			android:layout_marginBottom="16dp"
+			android:src="@android:drawable/ic_menu_search"
+			android:alpha="0.6"
+			app:tint="?attr/colorOnSurfaceVariant"/>
+
+		<com.google.android.material.textview.MaterialTextView
+			android:layout_height="wrap_content"
+			android:layout_width="wrap_content"
+			android:layout_marginBottom="8dp"
+			android:textAppearance="?attr/textAppearanceHeadlineSmall"
+			android:textColor="?attr/colorOnSurface"
+			android:text="@string/search_no_results"/>
+
+		<com.google.android.material.textview.MaterialTextView
+			android:layout_height="wrap_content"
+			android:layout_width="wrap_content"
+			android:gravity="center"
+			android:textAppearance="?attr/textAppearanceBodyMedium"
+			android:textColor="?attr/colorOnSurfaceVariant"
+			android:text="Try different keywords"/>
+
+	</LinearLayout>
+
+	<androidx.constraintlayout.widget.ConstraintLayout
+		android:layout_height="0dp"
+		android:layout_width="0dp"
+		android:visibility="gone"
+		android:elevation="8dp"
+		app:layout_constraintBottom_toBottomOf="parent"
+		app:layout_constraintTop_toBottomOf="@id/top_search_bar_layout"
+		android:focusable="true"
+		android:background="?attr/colorSurface"
+		tools:visibility="visible"
+		android:focusableInTouchMode="true"
+		app:layout_constraintStart_toStartOf="parent"
+		app:layout_constraintEnd_toEndOf="parent"
+		android:id="@+id/suggestions_panel">
+
+		<LinearLayout
+			android:layout_height="wrap_content"
+			android:layout_width="0dp"
+			android:visibility="gone"
+			android:gravity="center_vertical"
+			tools:visibility="visible"
+			app:layout_constraintTop_toTopOf="parent"
+			android:paddingVertical="12dp"
+			android:orientation="horizontal"
+			app:layout_constraintStart_toStartOf="parent"
+			app:layout_constraintEnd_toEndOf="parent"
+			android:paddingHorizontal="16dp"
+			android:id="@+id/recent_header_layout">
+
+			<com.google.android.material.textview.MaterialTextView
+				android:layout_height="wrap_content"
+				android:layout_width="0dp"
+				android:textAppearance="?attr/textAppearanceTitleMedium"
+				android:textColor="?attr/colorOnSurface"
+				android:layout_weight="1"
+				android:text="Recent searches"/>
+
+			<com.google.android.material.button.MaterialButton
+				android:layout_height="wrap_content"
+				android:layout_width="wrap_content"
+				android:minHeight="0dp"
+				android:textColor="?attr/colorPrimary"
+				style="@style/Widget.Material3.Button.TextButton"
+				android:id="@+id/clear_recent_button"
+				android:text="Clear all"/>
+
+		</LinearLayout>
+
+		<androidx.recyclerview.widget.RecyclerView
+			android:layout_height="0dp"
+			android:layout_width="0dp"
+			android:scrollbars="vertical"
+			app:layout_constraintStart_toStartOf="parent"
+			android:paddingBottom="16dp"
+			tools:listitem="@layout/item_search_suggestion"
+			android:clipToPadding="false"
+			app:layout_constraintEnd_toEndOf="parent"
+			app:layout_constraintBottom_toBottomOf="parent"
+			app:layoutManager="LinearLayoutManager"
+			app:layout_constraintTop_toBottomOf="@id/recent_header_layout"
+			android:id="@+id/suggestions_list"/>
+
+	</androidx.constraintlayout.widget.ConstraintLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
