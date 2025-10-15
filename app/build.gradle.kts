@@ -99,7 +99,7 @@ dependencies {
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.media:media:1.7.1")
 
     // =====================================================
     // DATA PROCESSING
@@ -138,10 +138,18 @@ dependencies {
     // =====================================================
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+    
+    // =====================================================
+    // ANDROID-TV SUPPORT
+    // =====================================================
+    implementation("androidx.leanback:leanback:1.0.0")
 
     // =====================================================
     // TESTING
     // =====================================================
+    // LeakCanary dependency যোগ করুন
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.12")
+    
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
