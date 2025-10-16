@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:app="http://schemas.android.com/apk/res-auto"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+     android:background="@drawable/bg_bottomsheet"
+     android:padding="24dp">
+
+    <!-- Centered Content Group -->
+    <LinearLayout
+         android:id="@+id/centerContent"
+         android:layout_width="wrap_content"
+         android:layout_height="wrap_content"
+         android:orientation="vertical"
+         android:gravity="center_horizontal"
+         app:layout_constraintTop_toTopOf="parent"
+         app:layout_constraintBottom_toTopOf="@id/bottomContent"
+         app:layout_constraintStart_toStartOf="parent"
+         app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- App Logo with Animated Rings -->
+        <FrameLayout
+             android:layout_width="180dp"
+             android:layout_height="180dp"
+             android:layout_marginBottom="32dp">
+
+            <!-- Outer Animated Ring -->
+            <View
+                 android:id="@+id/outerRing"
+                 android:layout_width="180dp"
+                 android:layout_height="180dp"
+                 android:layout_gravity="center"
+                 android:background="@drawable/circle_ring_outer" />
+
+            <!-- Inner Animated Ring -->
+            <View
+                 android:id="@+id/innerRing"
+                 android:layout_width="140dp"
+                 android:layout_height="140dp"
+                 android:layout_gravity="center"
+                 android:background="@drawable/circle_ring_inner" />
+
+            <!-- App Logo/Icon -->
+            <ImageView
+                 android:id="@+id/ivLogo"
+                 android:layout_width="100dp"
+                 android:layout_height="100dp"
+                 android:layout_gravity="center"
+                 android:scaleType="centerCrop"
+                 android:src="@drawable/ic_launcher"
+                 android:contentDescription="App logo" />
+
+        </FrameLayout>
+
+        <!-- Bottom Sheet Handle -->
+        <View
+             android:layout_width="32dp"
+             android:layout_height="4dp"
+             android:layout_marginBottom="24dp"
+             android:background="?attr/colorOutlineVariant"
+             android:alpha="0.4" />
+
+        <!-- Title -->
+        <TextView
+             android:id="@+id/tvTitle"
+             android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
+             android:layout_marginBottom="12dp"
+             android:gravity="center"
+             android:text="Sign in to Continue"
+             android:textAppearance="?attr/textAppearanceHeadlineMedium"
+             android:textColor="?attr/colorOnSurface"
+             android:textStyle="bold" />
+
+        <!-- Subtitle -->
+        <TextView
+             android:id="@+id/tvSubtitle"
+             android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
+             android:gravity="center"
+             android:text="Access your personalized experience"
+             android:textAppearance="?attr/textAppearanceBodyMedium"
+             android:textColor="?attr/colorOnSurfaceVariant" />
+
+    </LinearLayout>
+
+    <!-- Bottom Content (Google Sign-in) -->
+    <LinearLayout
+         android:id="@+id/bottomContent"
+         android:layout_width="match_parent"
+         android:layout_height="wrap_content"
+         android:orientation="vertical"
+         android:paddingBottom="16dp"
+         app:layout_constraintBottom_toBottomOf="parent"
+         app:layout_constraintStart_toStartOf="parent"
+         app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- Google Sign In Button -->
+        <com.google.android.material.button.MaterialButton
+             android:id="@+id/btnGoogle"
+             style="@style/Widget.Material3.Button.OutlinedButton"
+             android:layout_width="match_parent"
+             android:layout_height="56dp"
+             android:contentDescription="Sign in with Google"
+             android:fontFamily="sans-serif-medium"
+             android:insetTop="0dp"
+             android:insetBottom="0dp"
+             android:text="Continue with Google"
+             android:textAllCaps="false"
+             android:textColor="?attr/colorOnSurface"
+             android:textSize="16sp"
+             app:cornerRadius="12dp"
+             app:icon="@drawable/ic_google"
+             app:iconGravity="textStart"
+             app:iconPadding="12dp"
+             app:iconSize="24dp"
+             app:iconTint="@null"
+             app:rippleColor="?attr/colorOnSurfaceVariant"
+             app:strokeColor="?attr/colorOutline"
+             app:strokeWidth="1dp" />
+
+        <!-- Privacy Notice -->
+        <TextView
+             android:id="@+id/tvPrivacy"
+             android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
+             android:layout_gravity="center_horizontal"
+             android:layout_marginTop="16dp"
+             android:alpha="0.7"
+             android:gravity="center"
+             android:text="By continuing, you agree to our Terms of Service and Privacy Policy"
+             android:textAppearance="?attr/textAppearanceBodySmall"
+             android:textColor="?attr/colorOnSurfaceVariant" />
+
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

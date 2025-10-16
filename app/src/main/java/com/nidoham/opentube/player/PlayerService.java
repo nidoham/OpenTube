@@ -1,17 +1,29 @@
 package com.nidoham.opentube.player;
 
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Bitmap;
+import android.media.AudioManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.util.Log;
+import android.os.PowerManager;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.LruCache;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
@@ -22,15 +34,19 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.LoadControl;
 import androidx.media3.exoplayer.source.MergingMediaSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.upstream.DefaultAllocator;
 
 import com.nidoham.opentube.player.managers.PlayerNotificationManager;
 import com.nidoham.opentube.util.constant.PlayerConstants;
-import com.nidoham.stream.data.RxStreamInfoExtractor; // নতুন ইমপোর্ট
-
+import com.nidoham.opentube.util.UserManager;
+import com.nidoham.stream.data.RxStreamInfoExtractor;
+import com.nidoham.stream.database.timeline.watched.FirebaseWatchHistoryManager;
+import com.nidoham.stream.database.timeline.watched.model.WatchHistory;
 import com.nidoham.stream.player.playqueue.PlayQueue;
 import com.nidoham.stream.player.playqueue.PlayQueueItem;
+
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.VideoStream;
@@ -38,6 +54,7 @@ import org.schabi.newpipe.extractor.stream.VideoStream;
 import java.io.ByteArrayInputStream;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,40 +62,49 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import io.reactivex.rxjava3.core.Flowable; // নতুন ইমপোর্ট
-import io.reactivex.rxjava3.disposables.CompositeDisposable; // নতুন ইমপোর্ট
-import io.reactivex.rxjava3.disposables.Disposable; // নতুন ইমপোর্ট
+import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
+import io.reactivex.rxjava3.core.Flowable;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
+import io.reactivex.rxjava3.schedulers.Schedulers;
 
-/**
- * Refactored PlayerService with RxJava for stream extraction.
- */
 public class PlayerService extends Service {
 
-    private static final String TAG = "PlayerService";
     private static final int MAX_RETRIES = 2;
-    private static final int MAX_CACHE_SIZE = 50;
-    private static final int POSITION_UPDATE_INTERVAL_MS = 1000;
-    private static final int QUALITY_CHANGE_DELAY_MS = 500;
+    private static final int MAX_CACHE_SIZE_ITEMS = 20;
+    private static final int MAX_CACHE_SIZE_BYTES = 10 * 1024 * 1024;
+    private static final int POSITION_UPDATE_INTERVAL_MS = 3000;
+    private static final int HISTORY_SAVE_INTERVAL_MS = 30000;
+    private static final int QUALITY_CHANGE_DELAY_MS = 300;
+    private static final long FOREGROUND_NOTIFICATION_TIMEOUT_MS = 3000;
+    private static final long MIN_HISTORY_SAVE_POSITION_MS = 5000;
+    private static final long NEAR_END_THRESHOLD_MS = 10000;
     
     private final AtomicBoolean isLoadingStream = new AtomicBoolean(false);
     private final AtomicBoolean isForeground = new AtomicBoolean(false);
+    private final AtomicBoolean isInitialized = new AtomicBoolean(false);
+    private final AtomicBoolean isHistoryManagerReady = new AtomicBoolean(false);
+    private final Object historyLock = new Object();
     
-    private ExoPlayer exoPlayer;
-    private DefaultTrackSelector trackSelector;
-    private PlayQueue playQueue;
-    private PlayerNotificationManager notificationManager;
+    private volatile ExoPlayer exoPlayer;
+    private volatile DefaultTrackSelector trackSelector;
+    private volatile PlayQueue playQueue;
+    private volatile PlayerNotificationManager notificationManager;
+    private volatile FirebaseWatchHistoryManager historyManager;
+    private volatile MediaSessionCompat mediaSession;
+    private volatile PowerManager.WakeLock wakeLock;
+    private volatile AudioManager audioManager;
+    private volatile boolean hasAudioFocus = false;
     
-    private final LruCache<String, StreamData> streamCache = 
-        new LruCache<>(MAX_CACHE_SIZE);
-    
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ThreadSafeStreamCache streamCache = new ThreadSafeStreamCache(MAX_CACHE_SIZE_ITEMS);
+    private final MainThreadHandler handler = new MainThreadHandler(this);
     private final IBinder binder = new PlayerServiceBinder();
     
-    private String qualityPreference = "720p";
+    private volatile String qualityPreference = "720p";
+    private volatile String currentStreamUrl;
+    private volatile Disposable currentExtractionDisposable;
     
-    // RxJava সাবস্ক্রিপশন ম্যানেজ করার জন্য
     private final CompositeDisposable compositeDisposable = new CompositeDisposable();
-
     private final CopyOnWriteArrayList<PlaybackStateListener> playbackListeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<MetadataListener> metadataListeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<QueueListener> queueListeners = new CopyOnWriteArrayList<>();
@@ -86,29 +112,78 @@ public class PlayerService extends Service {
     private final CopyOnWriteArrayList<LoadingListener> loadingListeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<QualityListener> qualityListeners = new CopyOnWriteArrayList<>();
     
-    private final Runnable positionUpdateRunnable = new Runnable() {
+    private final PositionUpdateRunnable positionUpdateRunnable = new PositionUpdateRunnable(this);
+    private final HistorySaveRunnable historySaveRunnable = new HistorySaveRunnable(this);
+    
+    private static class MainThreadHandler extends Handler {
+        private final WeakReference<PlayerService> serviceRef;
+        
+        MainThreadHandler(PlayerService service) {
+            super(Looper.getMainLooper());
+            this.serviceRef = new WeakReference<>(service);
+        }
+        
+        PlayerService getService() {
+            return serviceRef.get();
+        }
+    }
+    
+    private static class PositionUpdateRunnable implements Runnable {
+        private final WeakReference<PlayerService> serviceRef;
+        
+        PositionUpdateRunnable(PlayerService service) {
+            this.serviceRef = new WeakReference<>(service);
+        }
+        
         @Override
         public void run() {
-            if (exoPlayer != null && exoPlayer.isPlaying()) {
-                long position = exoPlayer.getCurrentPosition();
-                long duration = exoPlayer.getDuration();
+            PlayerService service = serviceRef.get();
+            if (service == null) return;
+            
+            ExoPlayer player = service.exoPlayer;
+            if (player != null && player.isPlaying()) {
+                long position = player.getCurrentPosition();
+                long duration = player.getDuration();
                 
                 if (duration > 0) {
-                    notifyPositionUpdate(position, duration);
+                    service.notifyPositionUpdate(position, duration);
+                    service.updateMediaSessionPosition(position, duration);
                     
-                    if (notificationManager != null) {
-                        notificationManager.updatePosition(position);
+                    PlayerNotificationManager nm = service.notificationManager;
+                    if (nm != null) {
+                        nm.updatePosition(position);
                     }
                 }
             }
-            handler.postDelayed(this, POSITION_UPDATE_INTERVAL_MS);
+            
+            Handler h = service.handler;
+            if (h != null) {
+                h.postDelayed(this, POSITION_UPDATE_INTERVAL_MS);
+            }
         }
-    };
+    }
     
-    // ═══════════════════════════════════════════════════════════════
-    // Listener Interfaces
-    // ═══════════════════════════════════════════════════════════════
-    
+    private static class HistorySaveRunnable implements Runnable {
+        private final WeakReference<PlayerService> serviceRef;
+        
+        HistorySaveRunnable(PlayerService service) {
+            this.serviceRef = new WeakReference<>(service);
+        }
+        
+        @Override
+        public void run() {
+            PlayerService service = serviceRef.get();
+            if (service == null) return;
+            
+            service.saveWatchHistoryInternal(false);
+            
+            Handler h = service.handler;
+            if (h != null) {
+                h.postDelayed(this, HISTORY_SAVE_INTERVAL_MS);
+            }
+        }
+    }
+
     public interface PlaybackStateListener {
         void onPlaybackStateChanged(int state, boolean isPlaying, long position, long duration);
         void onPositionUpdate(long position, long duration);
@@ -141,164 +216,523 @@ public class PlayerService extends Service {
         void onQualityChanged(String quality);
         void onAvailableQualitiesChanged(List<String> qualities);
     }
-    
-    // ═══════════════════════════════════════════════════════════════
-    // Stream Data Class
-    // ═══════════════════════════════════════════════════════════════
-    
+
     private static class StreamData {
         final StreamInfo streamInfo;
         final List<VideoStream> videoStreams;
         final List<AudioStream> audioStreams;
-        String selectedVideoUrl;
-        String selectedAudioUrl;
-        String currentQuality;
+        volatile String selectedVideoUrl;
+        volatile String selectedAudioUrl;
+        volatile String currentQuality;
+        final long timestamp;
+        final int sizeBytes;
 
         StreamData(StreamInfo info) {
             this.streamInfo = info;
-            this.videoStreams = info.getVideoOnlyStreams();
-            this.audioStreams = info.getAudioStreams();
+            this.videoStreams = info.getVideoOnlyStreams() != null ? 
+                new ArrayList<>(info.getVideoOnlyStreams()) : new ArrayList<>();
+            this.audioStreams = info.getAudioStreams() != null ? 
+                new ArrayList<>(info.getAudioStreams()) : new ArrayList<>();
+            this.timestamp = System.currentTimeMillis();
+            this.sizeBytes = estimateSize();
         }
 
-        void selectQuality(String qualityPref) {
+        synchronized void selectQuality(String qualityPref) {
             selectedVideoUrl = selectBestVideoStream(qualityPref);
             selectedAudioUrl = selectBestAudioStream();
             currentQuality = qualityPref;
         }
 
         private String selectBestVideoStream(String qualityPref) {
-            if (videoStreams == null || videoStreams.isEmpty()) return null;
+            if (videoStreams.isEmpty()) return null;
 
             int targetHeight = parseQualityHeight(qualityPref);
             VideoStream bestMatch = null;
             int smallestDiff = Integer.MAX_VALUE;
 
             for (VideoStream stream : videoStreams) {
+                if (stream == null) continue;
+                
                 int height = stream.getHeight();
                 int diff = Math.abs(height - targetHeight);
+                
                 if (diff < smallestDiff) {
                     smallestDiff = diff;
                     bestMatch = stream;
                 }
             }
+            
             return bestMatch != null ? bestMatch.getContent() : null;
         }
 
         private String selectBestAudioStream() {
-            if (audioStreams == null || audioStreams.isEmpty()) return null;
+            if (audioStreams.isEmpty()) return null;
 
             AudioStream bestAudio = null;
             int highestBitrate = -1;
 
             for (AudioStream stream : audioStreams) {
+                if (stream == null) continue;
+                
                 int bitrate = stream.getAverageBitrate();
                 if (bitrate > highestBitrate) {
                     highestBitrate = bitrate;
                     bestAudio = stream;
                 }
             }
+            
             return bestAudio != null ? bestAudio.getContent() : null;
         }
 
         private int parseQualityHeight(String quality) {
+            if (quality == null) return 720;
+            
             try {
                 return Integer.parseInt(quality.replaceAll("[^0-9]", ""));
             } catch (NumberFormatException e) {
                 return 720;
             }
         }
+        
+        private int estimateSize() {
+            return (streamInfo != null ? 5000 : 0) + 
+                   (videoStreams.size() * 200) + 
+                   (audioStreams.size() * 100);
+        }
 
-        boolean hasValidStreams() {
+        synchronized boolean hasValidStreams() {
             return selectedVideoUrl != null && selectedAudioUrl != null;
+        }
+        
+        boolean isExpired(long maxAgeMs) {
+            return (System.currentTimeMillis() - timestamp) > maxAgeMs;
         }
     }
     
-    // ═══════════════════════════════════════════════════════════════
-    // Service Lifecycle
-    // ═══════════════════════════════════════════════════════════════
-    
+    private static class ThreadSafeStreamCache {
+        private final LruCache<String, StreamData> cache;
+        private final Object lock = new Object();
+        private int totalSizeBytes = 0;
+        
+        ThreadSafeStreamCache(int maxSize) {
+            this.cache = new LruCache<String, StreamData>(maxSize) {
+                @Override
+                protected void entryRemoved(boolean evicted, String key, 
+                                          StreamData oldValue, StreamData newValue) {
+                    if (oldValue != null) {
+                        totalSizeBytes -= oldValue.sizeBytes;
+                    }
+                }
+            };
+        }
+        
+        void put(String key, StreamData data) {
+            if (key == null || data == null) return;
+            
+            synchronized (lock) {
+                if (totalSizeBytes + data.sizeBytes > MAX_CACHE_SIZE_BYTES) {
+                    cache.evictAll();
+                    totalSizeBytes = 0;
+                }
+                
+                cache.put(key, data);
+                totalSizeBytes += data.sizeBytes;
+            }
+        }
+        
+        StreamData get(String key) {
+            if (key == null) return null;
+            
+            synchronized (lock) {
+                StreamData data = cache.get(key);
+                if (data != null && data.isExpired(TimeUnit.HOURS.toMillis(1))) {
+                    cache.remove(key);
+                    return null;
+                }
+                return data;
+            }
+        }
+        
+        void clear() {
+            synchronized (lock) {
+                cache.evictAll();
+                totalSizeBytes = 0;
+            }
+        }
+    }
+
     public class PlayerServiceBinder extends Binder {
         public PlayerService getService() {
             return PlayerService.this;
         }
     }
+    
+    private final BroadcastReceiver audioNoisyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                if (exoPlayer != null && exoPlayer.isPlaying()) {
+                    exoPlayer.pause();
+                    notifyPlaybackStateChanged();
+                }
+            }
+        }
+    };
+    
+    private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener = 
+        new AudioManager.OnAudioFocusChangeListener() {
+            @Override
+            public void onAudioFocusChange(int focusChange) {
+                handleAudioFocusChange(focusChange);
+            }
+        };
 
     @Override
     public void onCreate() {
         super.onCreate();
-        Log.d(TAG, "PlayerService onCreate");
-
+        
+        if (!isInitialized.compareAndSet(false, true)) {
+            return;
+        }
+        
+        acquireWakeLock();
+        initializeAudioManager();
         initializePlayer();
+        initializeMediaSession();
         initializeNotificationManager();
+        initializeHistoryManager();
         setupPlayerListeners();
+        registerReceivers();
+        
+        startDummyForeground();
+    }
+    
+    private void startDummyForeground() {
+        handler.postDelayed(() -> {
+            if (!isForeground.get() && notificationManager != null) {
+                try {
+                    startForeground(PlayerConstants.NOTIFICATION_ID, 
+                        notificationManager.getNotification());
+                    isForeground.set(true);
+                } catch (Exception ignored) {
+                }
+            }
+        }, 100);
+    }
+    
+    private void acquireWakeLock() {
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            if (powerManager != null) {
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK, 
+                    "PlayerService::WakeLock"
+                );
+                wakeLock.setReferenceCounted(false);
+                wakeLock.acquire(TimeUnit.HOURS.toMillis(3));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+    
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            try {
+                wakeLock.release();
+            } catch (Exception ignored) {
+            }
+            wakeLock = null;
+        }
+    }
+    
+    private void initializeAudioManager() {
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+    }
+    
+    private boolean requestAudioFocus() {
+        if (audioManager == null) return false;
+        
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.media.AudioAttributes attributes = new android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build();
+            
+            android.media.AudioFocusRequest focusRequest = 
+                new android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attributes)
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .build();
+            
+            result = audioManager.requestAudioFocus(focusRequest);
+        } else {
+            result = audioManager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            );
+        }
+        
+        hasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        return hasAudioFocus;
+    }
+    
+    private void abandonAudioFocus() {
+        if (audioManager != null && hasAudioFocus) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                android.media.AudioAttributes attributes = new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+                
+                android.media.AudioFocusRequest focusRequest = 
+                    new android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(attributes)
+                        .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                        .build();
+                
+                audioManager.abandonAudioFocusRequest(focusRequest);
+            } else {
+                audioManager.abandonAudioFocus(audioFocusChangeListener);
+            }
+            hasAudioFocus = false;
+        }
+    }
+    
+    private void handleAudioFocusChange(int focusChange) {
+        ExoPlayer player = exoPlayer;
+        if (player == null) return;
+        
+        switch (focusChange) {
+            case AudioManager.AUDIOFOCUS_GAIN:
+                if (!player.isPlaying()) {
+                    player.setVolume(1.0f);
+                    player.play();
+                    notifyPlaybackStateChanged();
+                }
+                break;
+                
+            case AudioManager.AUDIOFOCUS_LOSS:
+                if (player.isPlaying()) {
+                    player.pause();
+                    notifyPlaybackStateChanged();
+                }
+                abandonAudioFocus();
+                break;
+                
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                if (player.isPlaying()) {
+                    player.pause();
+                    notifyPlaybackStateChanged();
+                }
+                break;
+                
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                if (player.isPlaying()) {
+                    player.setVolume(0.3f);
+                }
+                break;
+        }
+    }
+    
+    private void registerReceivers() {
+        try {
+            IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(audioNoisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(audioNoisyReceiver, filter);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+    
+    private void unregisterReceivers() {
+        try {
+            unregisterReceiver(audioNoisyReceiver);
+        } catch (Exception ignored) {
+        }
     }
     
     private void initializePlayer() {
-        trackSelector = new DefaultTrackSelector(this);
+        boolean isWiFi = isWiFiConnected();
+        
+        trackSelector = new DefaultTrackSelector(this, new AdaptiveTrackSelection.Factory());
         trackSelector.setParameters(
             trackSelector.buildUponParameters()
                 .setPreferredAudioLanguage("en")
                 .setForceHighestSupportedBitrate(false)
+                .setMaxVideoBitrate(isWiFi ? Integer.MAX_VALUE : 2_000_000)
                 .build()
         );
 
+        int bufferMultiplier = isWiFi ? 2 : 1;
         LoadControl loadControl = new DefaultLoadControl.Builder()
-                .setAllocator(new DefaultAllocator(true, 64 * 1024))
-                .setBufferDurationsMs(2000, 20000, 200, 500)
-                .setTargetBufferBytes(-1)
-                .setPrioritizeTimeOverSizeThresholds(true)
-                .setBackBuffer(5000, false)
-                .build();
+            .setAllocator(new DefaultAllocator(true, 64 * 1024))
+            .setBufferDurationsMs(
+                2000 * bufferMultiplier, 
+                20000 * bufferMultiplier, 
+                200, 
+                500
+            )
+            .setTargetBufferBytes(-1)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(5000, false)
+            .build();
+
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .setUsage(C.USAGE_MEDIA)
+            .build();
 
         exoPlayer = new ExoPlayer.Builder(this)
-                .setTrackSelector(trackSelector)
-                .setLoadControl(loadControl)
-                .setSeekBackIncrementMs(5000)
-                .setSeekForwardIncrementMs(5000)
-                .setHandleAudioBecomingNoisy(true)
-                .build();
+            .setTrackSelector(trackSelector)
+            .setLoadControl(loadControl)
+            .setSeekBackIncrementMs(10000)
+            .setSeekForwardIncrementMs(10000)
+            .setAudioAttributes(audioAttributes, true)
+            .setWakeMode(C.WAKE_MODE_NETWORK)
+            .build();
+    }
+    
+    private boolean isWiFiConnected() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network network = cm.getActiveNetwork();
+                if (network == null) return false;
+                
+                NetworkCapabilities capabilities = cm.getNetworkCapabilities(network);
+                return capabilities != null && 
+                       capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+            } else {
+                android.net.NetworkInfo networkInfo = cm.getActiveNetworkInfo();
+                return networkInfo != null && 
+                       networkInfo.getType() == ConnectivityManager.TYPE_WIFI;
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    
+    private void initializeMediaSession() {
+        mediaSession = new MediaSessionCompat(this, "PlayerService");
+        mediaSession.setFlags(
+            MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
+            MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+        );
+        
+        mediaSession.setCallback(new MediaSessionCompat.Callback() {
+            @Override
+            public void onPlay() {
+                handlePlayPauseAction();
+            }
+            
+            @Override
+            public void onPause() {
+                handlePlayPauseAction();
+            }
+            
+            @Override
+            public void onSkipToNext() {
+                handleNextAction();
+            }
+            
+            @Override
+            public void onSkipToPrevious() {
+                handlePreviousAction();
+            }
+            
+            @Override
+            public void onSeekTo(long pos) {
+                handleSeekToPosition(pos);
+            }
+            
+            @Override
+            public void onStop() {
+                handleStopAction();
+            }
+        });
+        
+        mediaSession.setActive(true);
+        updateMediaSessionState(PlaybackStateCompat.STATE_NONE, 0, 0);
     }
     
     private void initializeNotificationManager() {
         notificationManager = new PlayerNotificationManager(this);
     }
+    
+    private void initializeHistoryManager() {
+        UserManager userManager = UserManager.getInstance(this);
+        
+        if (!userManager.isLoggedIn()) {
+            userManager.signInAnonymously(new UserManager.AuthCallback() {
+                @Override
+                public void onSuccess(@NonNull String userId) {
+                    synchronized (historyLock) {
+                        historyManager = new FirebaseWatchHistoryManager();
+                        isHistoryManagerReady.set(true);
+                    }
+                }
+
+                @Override
+                public void onFailure(@NonNull Exception e) {
+                    isHistoryManagerReady.set(false);
+                }
+            });
+        } else {
+            synchronized (historyLock) {
+                historyManager = new FirebaseWatchHistoryManager();
+                isHistoryManagerReady.set(true);
+            }
+        }
+    }
 
     private void setupPlayerListeners() {
+        if (exoPlayer == null) return;
+        
         exoPlayer.addListener(new Player.Listener() {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
-                Log.d(TAG, "Playback state changed: " + playbackState);
                 updateNotificationState();
                 notifyPlaybackStateChanged();
                 
                 if (playbackState == Player.STATE_ENDED) {
                     handlePlaybackEnded();
-                } else if (playbackState == Player.STATE_READY && !exoPlayer.isPlaying()) {
-                    exoPlayer.play();
+                } else if (playbackState == Player.STATE_READY) {
+                    if (requestAudioFocus()) {
+                        exoPlayer.play();
+                    }
                 }
             }
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
-                Log.d(TAG, "Is playing changed: " + isPlaying);
                 updateNotificationState();
                 notifyPlaybackStateChanged();
                 
                 if (isPlaying) {
                     handler.removeCallbacks(positionUpdateRunnable);
                     handler.post(positionUpdateRunnable);
+                    
+                    handler.removeCallbacks(historySaveRunnable);
+                    handler.postDelayed(historySaveRunnable, HISTORY_SAVE_INTERVAL_MS);
                 } else {
                     handler.removeCallbacks(positionUpdateRunnable);
+                    handler.removeCallbacks(historySaveRunnable);
                 }
             }
 
             @Override
             public void onPlayerError(@NonNull PlaybackException error) {
-                Log.e(TAG, "Player error: " + error.getMessage(), error);
-                notifyPlaybackError("Playback error: " + error.getMessage(), error);
+                notifyPlaybackError("Playback error: " + 
+                    (error.getMessage() != null ? error.getMessage() : "Unknown"), error);
                 
-                if (playQueue != null && (playQueue.getIndex() < playQueue.size() - 1)) {
-                    handler.postDelayed(PlayerService.this::handleNextAction, 1000);
+                if (playQueue != null && playQueue.getIndex() < playQueue.size() - 1) {
+                    handler.postDelayed(PlayerService.this::handleNextAction, 1500);
                 }
             }
         });
@@ -310,78 +744,91 @@ public class PlayerService extends Service {
             return START_STICKY;
         }
         
-        /**
-         * Switch not working some device. if else working almost all device.
-         */
-        
         String action = intent.getAction();
         
-        if(action.equals(PlayerConstants.ACTION_PLAY)) {
-        	handlePlayAction(intent);
-        } else if(action.equals(PlayerConstants.ACTION_PAUSE)) {
-        	handlePauseAction();
-        } else if(action.equals(PlayerConstants.ACTION_STOP)) {
-        	handleStopAction();
-        } else if(action.equals(PlayerConstants.ACTION_NEXT)) {
-        	handleNextAction();
-        } else if(action.equals(PlayerConstants.ACTION_PREVIOUS)) {
-        	handlePreviousAction();
-        } else if(action.equals(PlayerConstants.ACTION_SEEK)) {
-        	handleSeekAction(intent);
-        } else if(action.equals(PlayerConstants.ACTION_CHANGE_QUALITY)) {
-        	handleChangeQuality(intent);
-        } else {
-            Log.w(TAG, "Unknown action: " + action);
+        switch (action) {
+            case PlayerConstants.ACTION_PLAY:
+                handlePlayAction(intent);
+                break;
+            case PlayerConstants.ACTION_PAUSE:
+                handlePlayPauseAction();
+                break;
+            case PlayerConstants.ACTION_STOP:
+                handleStopAction();
+                break;
+            case PlayerConstants.ACTION_NEXT:
+                handleNextAction();
+                break;
+            case PlayerConstants.ACTION_PREVIOUS:
+                handlePreviousAction();
+                break;
+            case PlayerConstants.ACTION_SEEK:
+                handleSeekAction(intent);
+                break;
+            case PlayerConstants.ACTION_CHANGE_QUALITY:
+                handleChangeQuality(intent);
+                break;
         }
 
         return START_STICKY;
     }
 
     private void handlePlayAction(Intent intent) {
-        // Check if we already have a loaded queue and just need to resume
         if (playQueue != null && !playQueue.isEmpty() && exoPlayer != null) {
-            Log.d(TAG, "Resuming existing playback session");
             if (!exoPlayer.isPlaying()) {
-                exoPlayer.play();
-                notifyPlaybackStateChanged();
+                if (requestAudioFocus()) {
+                    exoPlayer.play();
+                    notifyPlaybackStateChanged();
+                }
             }
+            ensureForegroundService();
             return;
         }
         
-        // If no existing queue, we need queue data to start a new session
         byte[] queueBytes = intent.getByteArrayExtra(PlayerConstants.EXTRA_PLAY_QUEUE);
         if (queueBytes == null) {
-            notifyPlaybackError("No queue data provided", new IllegalArgumentException("No queue data"));
+            notifyPlaybackError("No queue data provided", 
+                new IllegalArgumentException("No queue data"));
             return;
         }
 
-        playQueue = deserializeObject(queueBytes);
-        if (playQueue == null || playQueue.isEmpty()) {
-            notifyPlaybackError("Empty queue", new IllegalArgumentException("Empty queue"));
+        PlayQueue queue = deserializeObject(queueBytes);
+        if (queue == null || queue.isEmpty()) {
+            notifyPlaybackError("Empty or invalid queue", 
+                new IllegalArgumentException("Empty queue"));
             return;
         }
 
-        Log.d(TAG, "PlayQueue loaded: " + playQueue.size() + " items");
-        startForegroundService();
+        playQueue = queue;
+        ensureForegroundService();
         notifyQueueChanged();
         playCurrentItem();
     }
     
-    private void startForegroundService() {
-        if (isForeground.getAndSet(true)) {
+    private void ensureForegroundService() {
+        if (isForeground.get()) {
             return;
         }
         
-        if (notificationManager != null) {
-            startForeground(PlayerConstants.NOTIFICATION_ID, notificationManager.getNotification());
-            notificationManager.showNotification();
-        }
-        
-        Log.d(TAG, "Started foreground service");
+        handler.post(() -> {
+            if (notificationManager != null) {
+                PlayQueueItem currentItem = playQueue != null ? playQueue.getItem() : null;
+                if (currentItem != null) {
+                    updateNotificationMetadata(currentItem);
+                }
+                
+                try {
+                    startForeground(PlayerConstants.NOTIFICATION_ID, 
+                        notificationManager.getNotification());
+                    isForeground.set(true);
+                } catch (Exception ignored) {
+                }
+            }
+        });
     }
     
     private void stopForegroundService() {
-        if (!isForeground.getAndSet(false)) {
+        if (!isForeground.compareAndSet(true, false)) {
             return;
         }
         
@@ -390,40 +837,55 @@ public class PlayerService extends Service {
         }
         
         stopForeground(true);
+        
         handler.removeCallbacks(positionUpdateRunnable);
-        Log.d(TAG, "Stopped foreground service");
+        handler.removeCallbacks(historySaveRunnable);
     }
 
     private void playCurrentItem() {
-        if (playQueue == null || playQueue.isEmpty() || playQueue.getItem() == null) {
-            notifyPlaybackError("No item to play", new IllegalStateException("No item to play"));
+        if (playQueue == null || playQueue.isEmpty()) {
+            notifyPlaybackError("No item to play", new IllegalStateException("No item"));
             return;
         }
 
         PlayQueueItem item = playQueue.getItem();
+        if (item == null) {
+            notifyPlaybackError("Invalid queue item", new IllegalStateException("Null item"));
+            return;
+        }
+
         String itemUrl = item.getUrl();
-        Log.d(TAG, "Playing item: " + item.getTitle() + " [" + itemUrl + "]");
-        notifyCurrentItemChanged(item);
+        if (itemUrl == null || itemUrl.isEmpty()) {
+            notifyPlaybackError("Invalid item URL", new IllegalArgumentException("Empty URL"));
+            return;
+        }
         
+        currentStreamUrl = itemUrl;
+        notifyCurrentItemChanged(item);
         updateNotificationMetadata(item);
 
         StreamData cachedData = streamCache.get(itemUrl);
         if (cachedData != null && cachedData.hasValidStreams()) {
-            playWithStreamData(cachedData);
+            playWithStreamDataAndResume(cachedData, item);
         } else {
-            extractAndPlay(itemUrl);
+            extractAndPlay(itemUrl, item);
         }
     }
 
-    private void extractAndPlay(String videoUrl) {
-        Disposable disposable = RxStreamInfoExtractor.extract(videoUrl)
+    private void extractAndPlay(String videoUrl, PlayQueueItem item) {
+        if (currentExtractionDisposable != null && !currentExtractionDisposable.isDisposed()) {
+            currentExtractionDisposable.dispose();
+        }
+        
+        currentExtractionDisposable = RxStreamInfoExtractor.extract(videoUrl)
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
                 .retryWhen(errors -> {
                     AtomicInteger counter = new AtomicInteger();
                     return errors.flatMap(error -> {
                         if (counter.incrementAndGet() > MAX_RETRIES) {
                             return Flowable.error(error);
                         }
-                        Log.d(TAG, "Retrying extraction... Attempt " + counter.get());
                         notifyLoadingProgress("Retrying... Attempt " + counter.get());
                         return Flowable.timer(2, TimeUnit.SECONDS);
                     });
@@ -437,88 +899,149 @@ public class PlayerService extends Service {
                     notifyLoadingFinished();
                 })
                 .subscribe(
-                        // onSuccess
-                        streamInfo -> {
-                            StreamData streamData = new StreamData(streamInfo);
-                            streamData.selectQuality(qualityPreference);
-                            
-                            streamCache.put(videoUrl, streamData);
-                            
-                            notifyMetadataLoaded(streamInfo);
-                            
-                            List<String> qualities = getAvailableQualities();
-                            if (qualities != null) {
-                                notifyAvailableQualitiesChanged(qualities);
-                            }
-
-                            if (!streamData.hasValidStreams()) {
-                                Log.e(TAG, "No valid streams found for " + videoUrl);
-                                String errorMsg = "No playable streams available";
-                                notifyStreamExtractionError(errorMsg, new IllegalStateException(errorMsg));
-                                notifyMetadataError(errorMsg);
-                                
-                                if (playQueue.getIndex() < playQueue.size() - 1) {
-                                    handler.postDelayed(this::handleNextAction, 1500);
-                                }
-                            } else {
-                                playWithStreamData(streamData);
-                            }
-                        },
-                        // onError
-                        error -> {
-                            Log.e(TAG, "Error extracting stream info after retries", error);
-                            String errorMsg = "Failed to load stream: " + error.getMessage();
-                            notifyStreamExtractionError(errorMsg, (Exception) error);
-                            notifyMetadataError(errorMsg);
-                            
-                            if (playQueue.getIndex() < playQueue.size() - 1) {
-                                handler.postDelayed(this::handleNextAction, 1500);
-                            }
-                        }
+                    streamInfo -> handleStreamInfoSuccess(streamInfo, videoUrl, item),
+                    error -> handleStreamInfoError(error, videoUrl)
                 );
         
-        compositeDisposable.add(disposable);
+        compositeDisposable.add(currentExtractionDisposable);
     }
-
-    private void playWithStreamData(StreamData streamData) {
-        if (!streamData.hasValidStreams()) {
+    
+    private void handleStreamInfoSuccess(StreamInfo streamInfo, String videoUrl, PlayQueueItem item) {
+        if (streamInfo == null) {
+            handleStreamInfoError(new IllegalStateException("Null StreamInfo"), videoUrl);
             return;
         }
+        
+        StreamData streamData = new StreamData(streamInfo);
+        streamData.selectQuality(qualityPreference);
+        
+        streamCache.put(videoUrl, streamData);
+        notifyMetadataLoaded(streamInfo);
+        
+        List<String> qualities = getAvailableQualitiesFromStreamData(streamData);
+        if (qualities != null && !qualities.isEmpty()) {
+            notifyAvailableQualitiesChanged(qualities);
+        }
+
+        if (!streamData.hasValidStreams()) {
+            String errorMsg = "No playable streams available for selected quality";
+            notifyStreamExtractionError(errorMsg, new IllegalStateException(errorMsg));
+            notifyMetadataError(errorMsg);
+            
+            if (playQueue != null && playQueue.getIndex() < playQueue.size() - 1) {
+                handler.postDelayed(this::handleNextAction, 2000);
+            }
+        } else {
+            playWithStreamDataAndResume(streamData, item);
+        }
+    }
+    
+    private void handleStreamInfoError(Throwable error, String videoUrl) {
+        String errorMsg = "Failed to load stream: " + 
+            (error.getMessage() != null ? error.getMessage() : "Unknown error");
+        notifyStreamExtractionError(errorMsg, error instanceof Exception ? 
+            (Exception) error : new Exception(error));
+        notifyMetadataError(errorMsg);
+        
+        if (playQueue != null && playQueue.getIndex() < playQueue.size() - 1) {
+            handler.postDelayed(this::handleNextAction, 2000);
+        }
+    }
+
+    private void playWithStreamDataAndResume(StreamData streamData, PlayQueueItem item) {
+        if (streamData == null || !streamData.hasValidStreams() || item == null) {
+            return;
+        }
+        
         playMergedStream(streamData.selectedVideoUrl, streamData.selectedAudioUrl);
+
+        if (!isHistoryManagerReady.get()) {
+            handler.postDelayed(() -> {
+                if (exoPlayer != null) {
+                    exoPlayer.setPlayWhenReady(true);
+                    if (requestAudioFocus()) {
+                        exoPlayer.play();
+                    }
+                    notifyPlaybackStateChanged();
+                }
+            }, 500);
+            return;
+        }
+        
+        String itemUrl = item.getUrl();
+        long itemDuration = item.getDuration() * 1000L;
+        
+        getWatchHistoryForCurrentItem(itemUrl, new FirebaseWatchHistoryManager.SingleHistoryCallback() {
+            @Override
+            public void onSuccess(@Nullable WatchHistory history) {
+                handler.post(() -> {
+                    if (exoPlayer == null) return;
+                    
+                    if (history != null && history.getLastDuration() > MIN_HISTORY_SAVE_POSITION_MS 
+                        && history.getLastDuration() < itemDuration - NEAR_END_THRESHOLD_MS) {
+                        
+                        long resumePosition = history.getLastDuration();
+                        exoPlayer.seekTo(resumePosition);
+                    }
+                    
+                    exoPlayer.setPlayWhenReady(true);
+                    if (requestAudioFocus()) {
+                        exoPlayer.play();
+                    }
+                    notifyPlaybackStateChanged();
+                });
+            }
+
+            @Override
+            public void onError(@NonNull String errorMessage) {
+                handler.post(() -> {
+                    if (exoPlayer != null) {
+                        exoPlayer.setPlayWhenReady(true);
+                        if (requestAudioFocus()) {
+                            exoPlayer.play();
+                        }
+                        notifyPlaybackStateChanged();
+                    }
+                });
+            }
+        });
     }
 
     private void playMergedStream(String videoUrl, String audioUrl) {
+        if (videoUrl == null || audioUrl == null || exoPlayer == null) {
+            notifyPlaybackError("Invalid stream URLs", 
+                new IllegalArgumentException("Null URLs"));
+            return;
+        }
+        
         try {
-            Log.d(TAG, "Starting playback - Video: " + videoUrl);
-            Log.d(TAG, "Starting playback - Audio: " + audioUrl);
-            
             DefaultHttpDataSource.Factory dataSourceFactory = new DefaultHttpDataSource.Factory()
-                    .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .setConnectTimeoutMs(10000)
-                    .setReadTimeoutMs(10000)
-                    .setAllowCrossProtocolRedirects(true)
-                    .setKeepPostFor302Redirects(true);
+                .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .setConnectTimeoutMs(15000)
+                .setReadTimeoutMs(15000)
+                .setAllowCrossProtocolRedirects(true)
+                .setKeepPostFor302Redirects(true);
 
             MediaItem videoMediaItem = new MediaItem.Builder()
-                    .setUri(videoUrl)
-                    .setMimeType(MimeTypes.VIDEO_MP4)
-                    .build();
+                .setUri(videoUrl)
+                .setMimeType(MimeTypes.VIDEO_MP4)
+                .build();
             
             ProgressiveMediaSource videoSource = new ProgressiveMediaSource.Factory(dataSourceFactory)
-                    .setContinueLoadingCheckIntervalBytes(1024 * 1024)
-                    .createMediaSource(videoMediaItem);
+                .setContinueLoadingCheckIntervalBytes(1024 * 1024)
+                .createMediaSource(videoMediaItem);
 
             MediaItem audioMediaItem = new MediaItem.Builder()
-                    .setUri(audioUrl)
-                    .setMimeType(MimeTypes.AUDIO_AAC)
-                    .build();
+                .setUri(audioUrl)
+                .setMimeType(MimeTypes.AUDIO_AAC)
+                .build();
             
             ProgressiveMediaSource audioSource = new ProgressiveMediaSource.Factory(dataSourceFactory)
-                    .setContinueLoadingCheckIntervalBytes(512 * 1024)
-                    .createMediaSource(audioMediaItem);
+                .setContinueLoadingCheckIntervalBytes(512 * 1024)
+                .createMediaSource(audioMediaItem);
 
             MergingMediaSource mergedSource = new MergingMediaSource(
-                    true, false, videoSource, audioSource
+                true, false, videoSource, audioSource
             );
 
             exoPlayer.stop();
@@ -526,61 +1049,73 @@ public class PlayerService extends Service {
             exoPlayer.setMediaSource(mergedSource, true);
             exoPlayer.prepare();
             
-            handler.postDelayed(() -> {
-                if (exoPlayer != null && exoPlayer.getPlaybackState() != Player.STATE_IDLE) {
-                    Log.d(TAG, "Starting playback after prepare");
-                    exoPlayer.setPlayWhenReady(true);
-                    exoPlayer.play();
-                    notifyPlaybackStateChanged();
-                }
-            }, 500);
-            
         } catch (Exception e) {
-            Log.e(TAG, "Error playing merged stream", e);
-            String errorMsg = "Playback error: " + e.getMessage();
+            String errorMsg = "Playback initialization error: " + 
+                (e.getMessage() != null ? e.getMessage() : "Unknown");
             notifyPlaybackError(errorMsg, e);
         }
     }
 
-    private void handlePauseAction() {
+    private void handlePlayPauseAction() {
         if (exoPlayer == null) return;
+        
         if (exoPlayer.isPlaying()) {
             exoPlayer.pause();
+            abandonAudioFocus();
         } else {
-            exoPlayer.play();
+            if (requestAudioFocus()) {
+                exoPlayer.play();
+            }
         }
+        notifyPlaybackStateChanged();
     }
 
     private void handleStopAction() {
+        saveWatchHistoryInternal(true);
+        
         if (exoPlayer != null) {
             exoPlayer.stop();
             exoPlayer.clearMediaItems();
         }
+        
+        abandonAudioFocus();
         stopForegroundService();
         stopSelf();
     }
 
     private void handleNextAction() {
-        if (playQueue != null && (playQueue.getIndex() < playQueue.size() - 1)) {
+        saveWatchHistoryInternal(true);
+        
+        if (playQueue != null && playQueue.getIndex() < playQueue.size() - 1) {
             playQueue.next();
             notifyQueueChanged();
             playCurrentItem();
+        } else {
+            handleStopAction();
         }
     }
 
     private void handlePreviousAction() {
+        saveWatchHistoryInternal(true);
+        
         if (playQueue != null && playQueue.getIndex() > 0) {
             playQueue.previous();
             notifyQueueChanged();
             playCurrentItem();
+        } else if (exoPlayer != null) {
+            exoPlayer.seekTo(0);
         }
     }
     
     private void handleSeekAction(Intent intent) {
         long position = intent.getLongExtra(PlayerConstants.EXTRA_SEEK_POSITION, -1);
+        handleSeekToPosition(position);
+    }
+    
+    private void handleSeekToPosition(long position) {
         if (position >= 0 && exoPlayer != null) {
-            Log.d(TAG, "Seeking to position: " + position);
             exoPlayer.seekTo(position);
+            updateMediaSessionPosition(position, exoPlayer.getDuration());
             
             if (notificationManager != null) {
                 notificationManager.updatePosition(position);
@@ -589,51 +1124,55 @@ public class PlayerService extends Service {
     }
 
     private void handlePlaybackEnded() {
+        saveWatchHistoryInternal(true);
         notifyPlaybackEnded();
         
-        if (playQueue != null && (playQueue.getIndex() < playQueue.size() - 1)) {
-            Log.d(TAG, "Auto-playing next item");
+        if (playQueue != null && playQueue.getIndex() < playQueue.size() - 1) {
             handleNextAction();
         } else {
-            Log.d(TAG, "Queue finished");
             notifyQueueFinished();
+            abandonAudioFocus();
             stopForegroundService();
         }
     }
 
     private void handleChangeQuality(Intent intent) {
         String newQuality = intent.getStringExtra(PlayerConstants.EXTRA_QUALITY_ID);
-        handleChangeQualityInternal(newQuality);
+        setQualityInternal(newQuality);
     }
     
     public void setQuality(String newQuality) {
-        handleChangeQualityInternal(newQuality);
+        setQualityInternal(newQuality);
     }
     
-    private void handleChangeQualityInternal(String newQuality) {
+    private void setQualityInternal(String newQuality) {
         if (newQuality == null || newQuality.equals(qualityPreference) || 
-            playQueue == null || playQueue.getItem() == null) {
+            playQueue == null || playQueue.getItem() == null || exoPlayer == null) {
             return;
         }
 
-        Log.d(TAG, "Changing quality to " + newQuality);
         long currentPosition = exoPlayer.getCurrentPosition();
         boolean wasPlaying = exoPlayer.isPlaying();
         qualityPreference = newQuality;
 
-        StreamData streamData = streamCache.get(playQueue.getItem().getUrl());
+        String itemUrl = playQueue.getItem().getUrl();
+        StreamData streamData = itemUrl != null ? streamCache.get(itemUrl) : null;
+        
         if (streamData != null) {
             streamData.selectQuality(newQuality);
+            
             if (streamData.hasValidStreams()) {
                 exoPlayer.stop();
-                playWithStreamData(streamData);
+                playMergedStream(streamData.selectedVideoUrl, streamData.selectedAudioUrl);
                 
                 handler.postDelayed(() -> {
                     if (exoPlayer != null) {
                         exoPlayer.seekTo(currentPosition);
-                        if (wasPlaying) {
+                        if (wasPlaying && requestAudioFocus()) {
                             exoPlayer.setPlayWhenReady(true);
+                            exoPlayer.play();
                         }
+                        notifyPlaybackStateChanged();
                     }
                 }, QUALITY_CHANGE_DELAY_MS);
                 
@@ -645,11 +1184,42 @@ public class PlayerService extends Service {
         }
     }
 
+    private void saveWatchHistoryInternal(boolean immediate) {
+        if (!isHistoryManagerReady.get() || playQueue == null || exoPlayer == null) {
+            return;
+        }
+
+        PlayQueueItem currentItem = playQueue.getItem();
+        if (currentItem == null) {
+            return;
+        }
+
+        long currentPosition = exoPlayer.getCurrentPosition();
+        long duration = exoPlayer.getDuration();
+
+        if (currentPosition < MIN_HISTORY_SAVE_POSITION_MS) {
+            return;
+        }
+
+        boolean isNearEnd = duration != C.TIME_UNSET && 
+            currentPosition >= duration - NEAR_END_THRESHOLD_MS;
+
+        synchronized (historyLock) {
+            if (historyManager != null) {
+                if (isNearEnd) {
+                    historyManager.insertOrUpdateHistory(0, currentItem);
+                } else {
+                    historyManager.insertOrUpdateHistory(currentPosition, currentItem);
+                }
+            }
+        }
+    }
+
     private void updateNotificationMetadata(PlayQueueItem item) {
         if (notificationManager == null || item == null) return;
         
-        String title = item.getTitle();
-        String artist = item.getUploader();
+        String title = item.getTitle() != null ? item.getTitle() : "Unknown Title";
+        String artist = item.getUploader() != null ? item.getUploader() : "Unknown Artist";
         Bitmap artwork = null;
         
         notificationManager.updateMetadata(title, artist, artwork);
@@ -665,6 +1235,35 @@ public class PlayerService extends Service {
         notificationManager.updatePlaybackState(isPlaying, position, duration);
     }
     
+    private void updateMediaSessionState(int state, long position, long duration) {
+        if (mediaSession == null) return;
+        
+        long actions = PlaybackStateCompat.ACTION_PLAY |
+                       PlaybackStateCompat.ACTION_PAUSE |
+                       PlaybackStateCompat.ACTION_PLAY_PAUSE |
+                       PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
+                       PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
+                       PlaybackStateCompat.ACTION_SEEK_TO |
+                       PlaybackStateCompat.ACTION_STOP;
+        
+        float playbackSpeed = (state == PlaybackStateCompat.STATE_PLAYING) ? 1.0f : 0.0f;
+        
+        PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
+            .setActions(actions)
+            .setState(state, position, playbackSpeed)
+            .build();
+        
+        mediaSession.setPlaybackState(playbackState);
+    }
+    
+    private void updateMediaSessionPosition(long position, long duration) {
+        if (exoPlayer == null) return;
+        
+        int state = exoPlayer.isPlaying() ? 
+            PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED;
+        updateMediaSessionState(state, position, duration);
+    }
+
     @Nullable
     public ExoPlayer getPlayer() {
         return exoPlayer;
@@ -672,33 +1271,39 @@ public class PlayerService extends Service {
     
     @Nullable
     public StreamInfo getCurrentStreamInfo() {
-        if (playQueue == null || playQueue.getItem() == null) {
+        if (currentStreamUrl == null) {
             return null;
         }
-        String itemUrl = playQueue.getItem().getUrl();
-        StreamData cachedData = streamCache.get(itemUrl);
+        
+        StreamData cachedData = streamCache.get(currentStreamUrl);
         return cachedData != null ? cachedData.streamInfo : null;
     }
     
     @Nullable
     public List<String> getAvailableQualities() {
-        if (playQueue == null || playQueue.getItem() == null) {
+        if (currentStreamUrl == null) {
             return null;
         }
-        String itemUrl = playQueue.getItem().getUrl();
-        StreamData cachedData = streamCache.get(itemUrl);
-        if (cachedData == null || cachedData.videoStreams == null) {
+        
+        StreamData cachedData = streamCache.get(currentStreamUrl);
+        return getAvailableQualitiesFromStreamData(cachedData);
+    }
+    
+    private List<String> getAvailableQualitiesFromStreamData(StreamData streamData) {
+        if (streamData == null || streamData.videoStreams == null) {
             return null;
         }
         
         List<String> qualities = new ArrayList<>();
-        for (VideoStream stream : cachedData.videoStreams) {
+        for (VideoStream stream : streamData.videoStreams) {
+            if (stream == null) continue;
+            
             String quality = stream.getHeight() + "p";
             if (!qualities.contains(quality)) {
                 qualities.add(quality);
             }
         }
-        return qualities;
+        return qualities.isEmpty() ? null : qualities;
     }
 
     private int getPlayerState() {
@@ -711,35 +1316,60 @@ public class PlayerService extends Service {
             case Player.STATE_ENDED:
                 return PlayerConstants.STATE_ENDED;
             case Player.STATE_READY:
-                return exoPlayer.isPlaying() ? PlayerConstants.STATE_PLAYING : PlayerConstants.STATE_PAUSED;
+                return exoPlayer.isPlaying() ? 
+                    PlayerConstants.STATE_PLAYING : PlayerConstants.STATE_PAUSED;
             default:
                 return PlayerConstants.STATE_STOPPED;
+        }
+    }
+
+    private void getWatchHistoryForCurrentItem(String videoUrl, 
+                                               FirebaseWatchHistoryManager.SingleHistoryCallback callback) {
+        if (!isHistoryManagerReady.get() || videoUrl == null) {
+            callback.onError("History not available");
+            return;
+        }
+        
+        synchronized (historyLock) {
+            if (historyManager != null) {
+                historyManager.getHistoryByUrl(videoUrl, callback);
+            } else {
+                callback.onError("History manager not initialized");
+            }
         }
     }
     
     @Nullable
     private <T extends Serializable> T deserializeObject(byte[] bytes) {
-        if (bytes == null) return null;
+        if (bytes == null || bytes.length == 0) return null;
+        
         try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
              ObjectInputStream ois = new ObjectInputStream(bis)) {
             return (T) ois.readObject();
         } catch (Exception e) {
-            Log.e(TAG, "Deserialization error", e);
             return null;
         }
     }
 
     @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        saveWatchHistoryInternal(true);
+        handleStopAction();
+    }
+
+    @Override
     public void onDestroy() {
         super.onDestroy();
-        Log.d(TAG, "PlayerService onDestroy");
         
+        saveWatchHistoryInternal(true);
         stopForegroundService();
         
-        // সমস্ত RxJava সাবস্ক্রিপশন বাতিল করা হচ্ছে
+        if (currentExtractionDisposable != null && !currentExtractionDisposable.isDisposed()) {
+            currentExtractionDisposable.dispose();
+        }
         compositeDisposable.clear();
         
-        handler.removeCallbacks(positionUpdateRunnable);
         handler.removeCallbacksAndMessages(null);
         
         playbackListeners.clear();
@@ -754,17 +1384,32 @@ public class PlayerService extends Service {
             notificationManager = null;
         }
         
+        if (mediaSession != null) {
+            mediaSession.setActive(false);
+            mediaSession.release();
+            mediaSession = null;
+        }
+        
         if (exoPlayer != null) {
             exoPlayer.stop();
             exoPlayer.release();
             exoPlayer = null;
         }
         
-        trackSelector = null;
-        streamCache.evictAll();
-        playQueue = null;
+        abandonAudioFocus();
+        unregisterReceivers();
+        releaseWakeLock();
         
-        Log.d(TAG, "PlayerService destroyed and cleaned up");
+        trackSelector = null;
+        streamCache.clear();
+        playQueue = null;
+        currentStreamUrl = null;
+        
+        synchronized (historyLock) {
+            historyManager = null;
+        }
+        
+        isInitialized.set(false);
     }
     
     @Nullable
@@ -773,21 +1418,22 @@ public class PlayerService extends Service {
         return binder;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Listener Management Methods
-    // ═══════════════════════════════════════════════════════════════
-    
     public void addPlaybackStateListener(PlaybackStateListener listener) {
-        if (listener != null && !playbackListeners.contains(listener)) {
-            playbackListeners.add(listener);
-            if (exoPlayer != null) {
-                handler.post(() -> listener.onPlaybackStateChanged(
-                    getPlayerState(),
-                    exoPlayer.isPlaying(),
-                    exoPlayer.getCurrentPosition(),
-                    exoPlayer.getDuration()
-                ));
-            }
+        if (listener == null || playbackListeners.contains(listener)) return;
+        
+        playbackListeners.add(listener);
+        
+        if (exoPlayer != null) {
+            handler.post(() -> {
+                if (exoPlayer != null) {
+                    listener.onPlaybackStateChanged(
+                        getPlayerState(),
+                        exoPlayer.isPlaying(),
+                        exoPlayer.getCurrentPosition(),
+                        exoPlayer.getDuration()
+                    );
+                }
+            });
         }
     }
     
@@ -796,12 +1442,13 @@ public class PlayerService extends Service {
     }
     
     public void addMetadataListener(MetadataListener listener) {
-        if (listener != null && !metadataListeners.contains(listener)) {
-            metadataListeners.add(listener);
-            StreamInfo currentInfo = getCurrentStreamInfo();
-            if (currentInfo != null) {
-                handler.post(() -> listener.onMetadataLoaded(currentInfo));
-            }
+        if (listener == null || metadataListeners.contains(listener)) return;
+        
+        metadataListeners.add(listener);
+        
+        StreamInfo currentInfo = getCurrentStreamInfo();
+        if (currentInfo != null) {
+            handler.post(() -> listener.onMetadataLoaded(currentInfo));
         }
     }
     
@@ -810,16 +1457,18 @@ public class PlayerService extends Service {
     }
     
     public void addQueueListener(QueueListener listener) {
-        if (listener != null && !queueListeners.contains(listener)) {
-            queueListeners.add(listener);
-            if (playQueue != null) {
-                handler.post(() -> {
-                    listener.onQueueChanged(playQueue.getIndex(), playQueue.size());
-                    if (playQueue.getItem() != null) {
-                        listener.onCurrentItemChanged(playQueue.getItem());
-                    }
-                });
-            }
+        if (listener == null || queueListeners.contains(listener)) return;
+        
+        queueListeners.add(listener);
+        
+        if (playQueue != null) {
+            handler.post(() -> {
+                listener.onQueueChanged(playQueue.getIndex(), playQueue.size());
+                PlayQueueItem item = playQueue.getItem();
+                if (item != null) {
+                    listener.onCurrentItemChanged(item);
+                }
+            });
         }
     }
     
@@ -848,16 +1497,17 @@ public class PlayerService extends Service {
     }
     
     public void addQualityListener(QualityListener listener) {
-        if (listener != null && !qualityListeners.contains(listener)) {
-            qualityListeners.add(listener);
-            handler.post(() -> {
-                listener.onQualityChanged(qualityPreference);
-                List<String> qualities = getAvailableQualities();
-                if (qualities != null) {
-                    listener.onAvailableQualitiesChanged(qualities);
-                }
-            });
-        }
+        if (listener == null || qualityListeners.contains(listener)) return;
+        
+        qualityListeners.add(listener);
+        
+        handler.post(() -> {
+            listener.onQualityChanged(qualityPreference);
+            List<String> qualities = getAvailableQualities();
+            if (qualities != null) {
+                listener.onAvailableQualitiesChanged(qualities);
+            }
+        });
     }
     
     public void removeQualityListener(QualityListener listener) {
@@ -866,6 +1516,7 @@ public class PlayerService extends Service {
     
     private void notifyPlaybackStateChanged() {
         if (exoPlayer == null) return;
+        
         int state = getPlayerState();
         boolean isPlaying = exoPlayer.isPlaying();
         long position = exoPlayer.getCurrentPosition();
@@ -874,6 +1525,11 @@ public class PlayerService extends Service {
         for (PlaybackStateListener listener : playbackListeners) {
             handler.post(() -> listener.onPlaybackStateChanged(state, isPlaying, position, duration));
         }
+        
+        updateMediaSessionState(
+            isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED,
+            position, duration
+        );
     }
     
     private void notifyPositionUpdate(long position, long duration) {
@@ -902,6 +1558,7 @@ public class PlayerService extends Service {
     
     private void notifyQueueChanged() {
         if (playQueue == null) return;
+        
         int index = playQueue.getIndex();
         int size = playQueue.size();
         
@@ -948,7 +1605,7 @@ public class PlayerService extends Service {
     
     private void notifyLoadingFinished() {
         for (LoadingListener listener : loadingListeners) {
-            handler.post(listener::onLoadingFinished);
+            handler.post(() -> listener.onLoadingFinished());
         }
     }
     

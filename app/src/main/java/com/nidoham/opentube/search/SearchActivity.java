@@ -16,9 +16,10 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.snackbar.Snackbar;
+import com.google.firebase.auth.FirebaseAuth;
 import com.nidoham.opentube.databinding.ActivitySearchBinding;
 import com.nidoham.opentube.player.PlayerActivity;
-// --- Change 1: Import the new RxJava-based services ---
+import com.nidoham.opentube.search.SearchHistoryManager;
 import com.nidoham.stream.data.SearchService;
 import com.nidoham.stream.data.SearchSuggestionService;
 
@@ -36,11 +37,8 @@ import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
-// --- Change 2: Remove the old callback interfaces ---
 public class SearchActivity extends AppCompatActivity {
 
-    private static final String PREF_SEARCH_HISTORY = "search_history";
-    private static final String KEY_SEARCH_HISTORY = "history_items";
     private static final int MAX_HISTORY_ITEMS = 10;
 
     private ActivitySearchBinding binding;
@@ -50,12 +48,14 @@ public class SearchActivity extends AppCompatActivity {
 
     private List<String> searchSuggestions = new ArrayList<>();
     private List<String> searchHistory = new ArrayList<>();
+    private List<SearchHistoryManager.SearchQuery> searchQueryObjects = new ArrayList<>();
     private List<StreamInfoItem> searchResults = new ArrayList<>();
 
-    // --- Change 3: Hold instances of the services and a CompositeDisposable for cleanup ---
     private SearchService searchService;
     private SearchSuggestionService suggestionService;
     private final CompositeDisposable disposables = new CompositeDisposable();
+
+    private SearchHistoryManager searchHistoryManager;
 
     private String currentQuery = "";
     private boolean isLoadingMore = false;
@@ -66,6 +66,7 @@ public class SearchActivity extends AppCompatActivity {
         binding = ActivitySearchBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
+        initializeFirebase();
         initializeServices();
         initializeViews();
         setupAdapters();
@@ -74,8 +75,47 @@ public class SearchActivity extends AppCompatActivity {
         showSuggestionsPanel();
     }
 
+    private void initializeFirebase() {
+        // TODO: Replace with your actual user ID from Firebase Auth
+        // Example: FirebaseAuth.getInstance().getCurrentUser().getUid()
+        String userId = FirebaseAuth.getInstance().getCurrentUser().getUid().toString(); // Replace this with actual user ID
+        
+        searchHistoryManager = new SearchHistoryManager(userId);
+        
+        // Attach real-time listener for automatic updates
+        searchHistoryManager.attachRealtimeListener(new SearchHistoryManager.OnHistoryFetchListener() {
+            @Override
+            public void onSuccess(List<SearchHistoryManager.SearchQuery> queries) {
+                // Update the UI with new search history
+                searchQueryObjects.clear();
+                searchQueryObjects.addAll(queries);
+                
+                searchHistory.clear();
+                for (SearchHistoryManager.SearchQuery query : queries) {
+                    searchHistory.add(query.getQueryText());
+                }
+                
+                historyAdapter.setSearchHistory(searchHistory);
+                
+                // Update visibility of recent header
+                if (binding.suggestionsPanel.getVisibility() == View.VISIBLE) {
+                    if (searchHistory.isEmpty()) {
+                        binding.recentHeaderLayout.setVisibility(View.GONE);
+                    } else {
+                        binding.recentHeaderLayout.setVisibility(View.VISIBLE);
+                    }
+                }
+            }
+
+            @Override
+            public void onFailure(String error) {
+                // Silently handle errors for real-time updates
+                // You can log this if needed
+            }
+        });
+    }
+
     private void initializeServices() {
-        // We will create the SearchService only when a query is actually made.
         suggestionService = new SearchSuggestionService();
     }
 
@@ -101,7 +141,6 @@ public class SearchActivity extends AppCompatActivity {
                 super.onScrolled(recyclerView, dx, dy);
                 LinearLayoutManager layoutManager = (LinearLayoutManager) recyclerView.getLayoutManager();
 
-                // --- Change 4: Check hasMoreResults on the service instance ---
                 if (layoutManager != null && !isLoadingMore && searchService != null && searchService.hasMoreResults()) {
                     int visibleItemCount = layoutManager.getChildCount();
                     int totalItemCount = layoutManager.getItemCount();
@@ -119,13 +158,11 @@ public class SearchActivity extends AppCompatActivity {
         currentQuery = query;
         showLoadingState();
 
-        // Create a new service for the new query. This correctly resets the state.
         searchService = new SearchService(ServiceList.YouTube, query);
 
         Disposable searchDisposable = searchService.performInitialSearch()
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
-                        // onSuccess: Replaces onSearchCompleted
                         result -> {
                             isLoadingMore = false;
                             searchResults.clear();
@@ -133,7 +170,6 @@ public class SearchActivity extends AppCompatActivity {
                             resultAdapter.setSearchResults(searchResults);
                             showSearchResults();
                         },
-                        // onError: Replaces onSearchError
                         this::handleSearchError
                 );
 
@@ -144,24 +180,19 @@ public class SearchActivity extends AppCompatActivity {
         if (isLoadingMore || searchService == null) return;
 
         isLoadingMore = true;
-        // Optionally show a loading footer in the adapter here
 
         Disposable nextPageDisposable = searchService.fetchNextPage()
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
-                        // onSuccess: Replaces onPageLoadCompleted
                         result -> {
                             isLoadingMore = false;
                             int previousSize = searchResults.size();
                             searchResults.addAll(result.getStreamItems());
                             resultAdapter.notifyItemRangeInserted(previousSize, result.getStreamItems().size());
-                            // Optionally hide loading footer here
                         },
-                        // onError: Replaces onSearchError for pagination
                         error -> {
                             isLoadingMore = false;
                             handleSearchError(error);
-                            // Optionally hide loading footer here
                         }
                 );
         disposables.add(nextPageDisposable);
@@ -174,13 +205,11 @@ public class SearchActivity extends AppCompatActivity {
         Disposable suggestionDisposable = suggestionService.getSuggestions(query)
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
-                        // onSuccess: Replaces onSuggestionsLoaded
                         suggestions -> {
                             searchSuggestions.clear();
                             searchSuggestions.addAll(suggestions);
                             suggestionAdapter.setSuggestions(searchSuggestions);
                         },
-                        // onError: Replaces onError for suggestions
                         error -> {
                             searchSuggestions.clear();
                             suggestionAdapter.setSuggestions(searchSuggestions);
@@ -191,7 +220,7 @@ public class SearchActivity extends AppCompatActivity {
 
     private void handleSearchError(Throwable error) {
         isLoadingMore = false;
-        showSearchResults(); // This will show the empty state if results are empty
+        showSearchResults();
 
         String errorMessage = "Search failed: " + error.getMessage();
         Snackbar.make(binding.getRoot(), errorMessage, Snackbar.LENGTH_LONG)
@@ -202,9 +231,6 @@ public class SearchActivity extends AppCompatActivity {
                 })
                 .show();
     }
-
-
-    // --- UNCHANGED METHODS BELOW (No logic changes needed) ---
 
     private void setupListeners() {
         binding.backButton.setOnClickListener(v -> onBackPressed());
@@ -269,18 +295,11 @@ public class SearchActivity extends AppCompatActivity {
 
     private void onSearchResultClicked(StreamInfoItem streamInfo) {
         try {
-            // Create a PlayQueueItem from your stream information
             PlayQueueItem item = PlayQueueItem.from(streamInfo);
-
-            // Create a list to hold the item(s) for the queue
             List<PlayQueueItem> itemList = new ArrayList<>();
             itemList.add(item);
-
-            // Use the new PlayQueue class instead of SimplePlayQueue
-            // The 'complete' flag is now the 'repeatEnabled' flag at the end of the constructor.
             PlayQueue queue = new PlayQueue(0, itemList, false);
 
-            // Create the intent and pass the new PlayQueue object
             Intent intent = new Intent(this, PlayerActivity.class);
             intent.putExtra("queue", queue);
             startActivity(intent);
@@ -332,47 +351,73 @@ public class SearchActivity extends AppCompatActivity {
     }
 
     private void loadSearchHistory() {
-        SharedPreferences prefs = getSharedPreferences(PREF_SEARCH_HISTORY, Context.MODE_PRIVATE);
-        Set<String> historySet = prefs.getStringSet(KEY_SEARCH_HISTORY, new HashSet<>());
-        searchHistory.clear();
-        searchHistory.addAll(historySet);
-        historyAdapter.setSearchHistory(searchHistory);
-    }
+        searchHistoryManager.fetchSearchHistory(new SearchHistoryManager.OnHistoryFetchListener() {
+            @Override
+            public void onSuccess(List<SearchHistoryManager.SearchQuery> queries) {
+                searchQueryObjects.clear();
+                searchQueryObjects.addAll(queries);
+                
+                searchHistory.clear();
+                for (SearchHistoryManager.SearchQuery query : queries) {
+                    searchHistory.add(query.getQueryText());
+                }
+                
+                historyAdapter.setSearchHistory(searchHistory);
+            }
 
-    private void saveSearchHistory() {
-        SharedPreferences prefs = getSharedPreferences(PREF_SEARCH_HISTORY, Context.MODE_PRIVATE);
-        SharedPreferences.Editor editor = prefs.edit();
-        Set<String> historySet = new HashSet<>(searchHistory);
-        editor.putStringSet(KEY_SEARCH_HISTORY, historySet);
-        editor.apply();
+            @Override
+            public void onFailure(String error) {
+                // Handle error silently or show a message
+                Snackbar.make(binding.getRoot(), "Failed to load search history", Snackbar.LENGTH_SHORT).show();
+            }
+        });
     }
 
     private void addToSearchHistory(String query) {
-        searchHistory.remove(query);
-        searchHistory.add(0, query);
-        if (searchHistory.size() > MAX_HISTORY_ITEMS) {
-            searchHistory = new ArrayList<>(searchHistory.subList(0, MAX_HISTORY_ITEMS));
-        }
-        saveSearchHistory();
-        historyAdapter.setSearchHistory(searchHistory);
+        searchHistoryManager.addSearchQuery(query, new SearchHistoryManager.OnOperationListener() {
+            @Override
+            public void onSuccess() {
+                // Real-time listener will automatically update the UI
+            }
+
+            @Override
+            public void onFailure(String error) {
+                // Handle error silently or show a message if needed
+            }
+        });
     }
 
     private void removeFromSearchHistory(int position) {
-        if (position >= 0 && position < searchHistory.size()) {
-            searchHistory.remove(position);
-            historyAdapter.setSearchHistory(searchHistory);
-            saveSearchHistory();
-            if (searchHistory.isEmpty()) {
-                binding.recentHeaderLayout.setVisibility(View.GONE);
-            }
+        if (position >= 0 && position < searchQueryObjects.size()) {
+            SearchHistoryManager.SearchQuery queryToRemove = searchQueryObjects.get(position);
+            
+            searchHistoryManager.removeSearchQuery(queryToRemove.getQueryId(), new SearchHistoryManager.OnOperationListener() {
+                @Override
+                public void onSuccess() {
+                    // Real-time listener will automatically update the UI
+                }
+
+                @Override
+                public void onFailure(String error) {
+                    Snackbar.make(binding.getRoot(), "Failed to remove item", Snackbar.LENGTH_SHORT).show();
+                }
+            });
         }
     }
 
     private void clearSearchHistory() {
-        searchHistory.clear();
-        historyAdapter.setSearchHistory(searchHistory);
-        binding.recentHeaderLayout.setVisibility(View.GONE);
-        saveSearchHistory();
+        searchHistoryManager.clearAllSearchHistory(new SearchHistoryManager.OnOperationListener() {
+            @Override
+            public void onSuccess() {
+                // Real-time listener will automatically update the UI
+                binding.recentHeaderLayout.setVisibility(View.GONE);
+            }
+
+            @Override
+            public void onFailure(String error) {
+                Snackbar.make(binding.getRoot(), "Failed to clear history", Snackbar.LENGTH_SHORT).show();
+            }
+        });
     }
 
     @Override
@@ -391,6 +436,7 @@ public class SearchActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        searchHistoryManager.detachRealtimeListener();
         disposables.clear();
         binding = null;
     }

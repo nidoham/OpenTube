@@ -9,7 +9,6 @@ class SplashActivity : AppCompatActivity() {
 
     private companion object {
         private const val SPLASH_DELAY = 1500L
-        private const val TEST = true
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -18,8 +17,7 @@ class SplashActivity : AppCompatActivity() {
 
         Handler().postDelayed({
             
-            val intent = Intent(applicationContext, MainActivity::class.java)
-            intent.putExtra("debug", TEST);
+            val intent = Intent(applicationContext, OnboardActivity::class.java)
             startActivity(intent)
 
             overridePendingTransition(0, 0)

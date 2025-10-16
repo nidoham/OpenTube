@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "184055685011",
+    "firebase_url": "https://opentube-c9a84-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "opentube-c9a84",
+    "storage_bucket": "opentube-c9a84.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:184055685011:android:2adffbf1be18986f4dd266",
+        "android_client_info": {
+          "package_name": "com.nidoham.opentube"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "184055685011-5v7t9aq0vefad3bcng5pt02ve8o6e878.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBXyooGzHzH6IDwnSpwqkIY0U9a5PdabCg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "184055685011-5v7t9aq0vefad3bcng5pt02ve8o6e878.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

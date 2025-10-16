@@ -71,6 +71,10 @@
 			android:name=".ExperimentActivity"
 			android:exported="false"
 			android:parentActivityName=".MainActivity"/>
+            
+        <activity
+			android:name=".OnboardActivity"
+			android:exported="false"/>
 
 		<activity
 			android:name="com.nidoham.opentube.error.DebugActivity"

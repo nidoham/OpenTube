@@ -13,6 +13,11 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.util.Date
 import kotlin.system.exitProcess
+import io.reactivex.rxjava3.plugins.RxJavaPlugins
+import java.io.IOException
+import java.net.SocketException
+import io.reactivex.rxjava3.exceptions.UndeliverableException
+import java.io.InterruptedIOException
 
 /**
  * Main Application class for OpenTube.
@@ -71,8 +76,9 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         INSTANCE = this
-        
+
         setupCrashHandler()
+        setupRxJavaErrorHandler() // RxJava undeliverable exception handling
 
         runCatching {
             initializeApplication()
@@ -100,6 +106,21 @@ class App : Application() {
     }
 
     /**
+     * Handles undeliverable RxJava exceptions globally.
+     */
+    private fun setupRxJavaErrorHandler() {
+        RxJavaPlugins.setErrorHandler { e ->
+            when {
+                e is UndeliverableException && e.cause is IOException -> return@setErrorHandler
+                e is IOException || e is SocketException -> return@setErrorHandler // Network interruption
+                e is InterruptedException -> return@setErrorHandler               // Thread interrupted
+                e is UndeliverableException && e.cause is InterruptedIOException -> return@setErrorHandler
+                else -> Log.e(TAG, "RxJava Undeliverable exception", e)
+            }
+        }
+    }
+
+    /**
      * Custom crash handler implementation using Kotlin features.
      */
     private inner class CustomCrashHandler : Thread.UncaughtExceptionHandler {
@@ -108,11 +129,11 @@ class App : Application() {
         override fun uncaughtException(thread: Thread, exception: Throwable) {
             runCatching {
                 Log.e(TAG, "Uncaught exception in thread ${thread.name}", exception)
-                
+
                 val crashReport = generateCrashReport(thread, exception)
                 saveCrashReport(crashReport)
                 startDebugActivity(crashReport)
-                
+
             }.onFailure { error ->
                 Log.e(TAG, "Error in custom crash handler", error)
                 defaultHandler?.uncaughtException(thread, exception)
@@ -128,7 +149,7 @@ class App : Application() {
             val stackTrace = StringWriter().apply {
                 exception.printStackTrace(PrintWriter(this))
             }.toString()
-            
+
             return buildString {
                 appendLine("OpenTube Crash Report")
                 appendLine("=====================")
@@ -157,12 +178,12 @@ class App : Application() {
             runCatching {
                 val fileName = "crash_${System.currentTimeMillis()}.txt"
                 val crashFile = File(crashDirectory, fileName)
-                
+
                 crashFile.writeText(crashReport)
                 Log.d(TAG, "Crash report saved: ${crashFile.absolutePath}")
-                
+
                 cleanupOldCrashReports()
-                
+
             }.onFailure { error ->
                 Log.e(TAG, "Failed to save crash report", error)
             }
@@ -173,8 +194,8 @@ class App : Application() {
                 crashDirectory.listFiles()?.let { files ->
                     if (files.size > MAX_CRASH_REPORTS) {
                         files.sortedBy { it.lastModified() }
-                             .take(files.size - MAX_CRASH_REPORTS)
-                             .forEach { it.delete() }
+                            .take(files.size - MAX_CRASH_REPORTS)
+                            .forEach { it.delete() }
                     }
                 }
             }.onFailure { error ->
@@ -185,16 +206,16 @@ class App : Application() {
         private fun startDebugActivity(crashReport: String) {
             runCatching {
                 Class.forName("com.nidoham.opentube.error.DebugActivity")
-                
+
                 val intent = Intent(this@App, com.nidoham.opentube.error.DebugActivity::class.java).apply {
                     putExtra("CRASH_REPORT", crashReport)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or 
-                            Intent.FLAG_ACTIVITY_CLEAR_TASK or 
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TASK or
                             Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
-                
+
                 startActivity(intent)
-                
+
             }.onFailure { error ->
                 when (error) {
                     is ClassNotFoundException -> Log.d(TAG, "DebugActivity not found, skipping debug screen")
@@ -213,8 +234,8 @@ class App : Application() {
         val isFirstRun = preferences.getBoolean(KEY_FIRST_RUN, true)
         if (isFirstRun) {
             preferences.edit()
-                      .putBoolean(KEY_FIRST_RUN, false)
-                      .apply()
+                .putBoolean(KEY_FIRST_RUN, false)
+                .apply()
         }
         return isFirstRun
     }
