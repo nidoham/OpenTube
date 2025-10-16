@@ -309,40 +309,46 @@ public class PlayerService extends Service {
         if (intent == null || intent.getAction() == null) {
             return START_STICKY;
         }
-
+        
+        /**
+         * Switch not working some device. if else working almost all device.
+         */
+        
         String action = intent.getAction();
-        Log.d(TAG, "onStartCommand: " + action);
-
-        switch (action) {
-            case PlayerConstants.ACTION_PLAY:
-                handlePlayAction(intent);
-                break;
-            case PlayerConstants.ACTION_PAUSE:
-                handlePauseAction();
-                break;
-            case PlayerConstants.ACTION_STOP:
-                handleStopAction();
-                break;
-            case PlayerConstants.ACTION_NEXT:
-                handleNextAction();
-                break;
-            case PlayerConstants.ACTION_PREVIOUS:
-                handlePreviousAction();
-                break;
-            case PlayerConstants.ACTION_SEEK:
-                handleSeekAction(intent);
-                break;
-            case PlayerConstants.ACTION_CHANGE_QUALITY:
-                handleChangeQuality(intent);
-                break;
-            default:
-                Log.w(TAG, "Unknown action: " + action);
+        
+        if(action.equals(PlayerConstants.ACTION_PLAY)) {
+        	handlePlayAction(intent);
+        } else if(action.equals(PlayerConstants.ACTION_PAUSE)) {
+        	handlePauseAction();
+        } else if(action.equals(PlayerConstants.ACTION_STOP)) {
+        	handleStopAction();
+        } else if(action.equals(PlayerConstants.ACTION_NEXT)) {
+        	handleNextAction();
+        } else if(action.equals(PlayerConstants.ACTION_PREVIOUS)) {
+        	handlePreviousAction();
+        } else if(action.equals(PlayerConstants.ACTION_SEEK)) {
+        	handleSeekAction(intent);
+        } else if(action.equals(PlayerConstants.ACTION_CHANGE_QUALITY)) {
+        	handleChangeQuality(intent);
+        } else {
+            Log.w(TAG, "Unknown action: " + action);
         }
 
         return START_STICKY;
     }
 
     private void handlePlayAction(Intent intent) {
+        // Check if we already have a loaded queue and just need to resume
+        if (playQueue != null && !playQueue.isEmpty() && exoPlayer != null) {
+            Log.d(TAG, "Resuming existing playback session");
+            if (!exoPlayer.isPlaying()) {
+                exoPlayer.play();
+                notifyPlaybackStateChanged();
+            }
+            return;
+        }
+        
+        // If no existing queue, we need queue data to start a new session
         byte[] queueBytes = intent.getByteArrayExtra(PlayerConstants.EXTRA_PLAY_QUEUE);
         if (queueBytes == null) {
             notifyPlaybackError("No queue data provided", new IllegalArgumentException("No queue data"));

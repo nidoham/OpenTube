@@ -1,8 +1,11 @@
 package com.nidoham.opentube.player;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
@@ -16,101 +19,84 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 
 /**
- * Optimized video scaling manager with thread-safe operations and memory leak prevention.
- * Manages video scaling modes with emphasis on proper fullscreen fit in landscape orientation.
+ * Advanced video scaling manager similar to MX Player and YouTube.
+ * Features:
+ * - Multiple aspect ratios (Default, 1:1, 4:3, 16:9, 18:9, 21:9)
+ * - Smart auto-fit in portrait (no black bars)
+ * - Proper fullscreen in landscape (no black bars)
+ * - Persistent user preferences
  */
 @UnstableApi
 public class VideoScaleManager {
     
-    @IntDef({SCALE_FIT, SCALE_FILL, SCALE_ZOOM})
+    @IntDef({SCALE_DEFAULT, SCALE_FIT, SCALE_FILL, SCALE_ZOOM, SCALE_1_1, SCALE_4_3, SCALE_16_9, SCALE_18_9, SCALE_21_9})
     @Retention(RetentionPolicy.SOURCE)
     public @interface ScaleMode {}
     
-    // Three essential scale modes for optimal user experience
-    public static final int SCALE_FIT = AspectRatioFrameLayout.RESIZE_MODE_FIT;
-    public static final int SCALE_FILL = AspectRatioFrameLayout.RESIZE_MODE_FILL;
-    public static final int SCALE_ZOOM = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+    // Scale modes
+    public static final int SCALE_DEFAULT = 0;  // Auto-fit (YouTube style)
+    public static final int SCALE_FIT = 1;      // Fit with black bars
+    public static final int SCALE_FILL = 2;     // Fill (crop if needed)
+    public static final int SCALE_ZOOM = 3;     // Zoom to fill
+    public static final int SCALE_1_1 = 4;      // 1:1 Square
+    public static final int SCALE_4_3 = 5;      // 4:3 Classic
+    public static final int SCALE_16_9 = 6;     // 16:9 Standard
+    public static final int SCALE_18_9 = 7;     // 18:9 Tall
+    public static final int SCALE_21_9 = 8;     // 21:9 Ultrawide
     
     private static final String TAG = "VideoScaleManager";
+    private static final String PREFS_NAME = "video_scale_prefs";
+    private static final String KEY_PORTRAIT_MODE = "portrait_scale_mode";
+    private static final String KEY_LANDSCAPE_MODE = "landscape_scale_mode";
     
     private final WeakReference<PlayerView> playerViewRef;
+    private final WeakReference<Context> contextRef;
     private final Handler mainHandler;
+    private final SharedPreferences prefs;
     
     @ScaleMode
-    private int preferredScaleMode = SCALE_FIT; // User's preferred mode in portrait
+    private int portraitScaleMode = SCALE_DEFAULT;
     @ScaleMode
-    private int currentScaleMode = SCALE_FIT; // Currently applied mode
+    private int landscapeScaleMode = SCALE_DEFAULT;
+    @ScaleMode
+    private int currentScaleMode = SCALE_DEFAULT;
+    
     private boolean isLandscape = false;
-    
     private volatile ScaleModeChangeListener listener;
     
-    /**
-     * Interface for listening to scale mode changes
-     */
     public interface ScaleModeChangeListener {
         void onScaleModeChanged(@ScaleMode int newScaleMode);
     }
     
-    /**
-     * Configuration for VideoScaleManager
-     */
-    public static class Config {
-        @ScaleMode
-        private int defaultScaleMode = SCALE_FIT;
-        private boolean autoZoomInLandscape = true;
-        
-        public Config setDefaultScaleMode(@ScaleMode int mode) {
-            this.defaultScaleMode = mode;
-            return this;
-        }
-        
-        public Config setAutoZoomInLandscape(boolean autoZoom) {
-            this.autoZoomInLandscape = autoZoom;
-            return this;
-        }
-        
-        public VideoScaleManager build(@NonNull PlayerView playerView) {
-            return new VideoScaleManager(playerView, this);
-        }
-    }
-    
-    /**
-     * Create a new VideoScaleManager with default configuration
-     */
     public VideoScaleManager(@NonNull PlayerView playerView) {
-        this(playerView, new Config());
-    }
-    
-    /**
-     * Create a new VideoScaleManager with custom configuration
-     */
-    private VideoScaleManager(@NonNull PlayerView playerView, @NonNull Config config) {
         this.playerViewRef = new WeakReference<>(playerView);
+        this.contextRef = new WeakReference<>(playerView.getContext());
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.preferredScaleMode = config.defaultScaleMode;
-        this.currentScaleMode = config.defaultScaleMode;
+        this.prefs = playerView.getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         
-        applyScaleModeInternal(config.defaultScaleMode);
+        loadSavedPreferences();
+        applyScaleModeInternal(getOptimalScaleMode());
     }
     
-    /**
-     * Create a builder for custom configuration
-     */
-    public static Config builder() {
-        return new Config();
+    private void loadSavedPreferences() {
+        portraitScaleMode = prefs.getInt(KEY_PORTRAIT_MODE, SCALE_DEFAULT);
+        landscapeScaleMode = prefs.getInt(KEY_LANDSCAPE_MODE, SCALE_DEFAULT);
+        
+        if (!isValidScaleMode(portraitScaleMode)) portraitScaleMode = SCALE_DEFAULT;
+        if (!isValidScaleMode(landscapeScaleMode)) landscapeScaleMode = SCALE_DEFAULT;
     }
     
-    /**
-     * Set listener for scale mode changes
-     */
+    private void savePreferences() {
+        prefs.edit()
+            .putInt(KEY_PORTRAIT_MODE, portraitScaleMode)
+            .putInt(KEY_LANDSCAPE_MODE, landscapeScaleMode)
+            .apply();
+    }
+    
     public synchronized void setScaleModeChangeListener(@Nullable ScaleModeChangeListener listener) {
         this.listener = listener;
     }
     
-    /**
-     * Update orientation and apply appropriate scaling
-     * Thread-safe method that can be called from any thread
-     */
     public synchronized void updateOrientation(int orientation) {
         boolean wasLandscape = isLandscape;
         isLandscape = (orientation == Configuration.ORIENTATION_LANDSCAPE);
@@ -122,17 +108,16 @@ public class VideoScaleManager {
     }
     
     /**
-     * Toggle between available scale modes
-     * Only effective in portrait mode; landscape always uses ZOOM
+     * Toggle through all available scale modes
      */
     public synchronized void toggleScaleMode() {
-        if (isLandscape) {
-            // Don't allow scale mode changes in landscape
-            return;
-        }
-        
+        @ScaleMode int currentMode = isLandscape ? landscapeScaleMode : portraitScaleMode;
         @ScaleMode int newMode;
-        switch (preferredScaleMode) {
+        
+        switch (currentMode) {
+            case SCALE_DEFAULT:
+                newMode = SCALE_FIT;
+                break;
             case SCALE_FIT:
                 newMode = SCALE_FILL;
                 break;
@@ -140,8 +125,23 @@ public class VideoScaleManager {
                 newMode = SCALE_ZOOM;
                 break;
             case SCALE_ZOOM:
+                newMode = SCALE_16_9;
+                break;
+            case SCALE_16_9:
+                newMode = SCALE_4_3;
+                break;
+            case SCALE_4_3:
+                newMode = SCALE_1_1;
+                break;
+            case SCALE_1_1:
+                newMode = SCALE_18_9;
+                break;
+            case SCALE_18_9:
+                newMode = SCALE_21_9;
+                break;
+            case SCALE_21_9:
             default:
-                newMode = SCALE_FIT;
+                newMode = SCALE_DEFAULT;
                 break;
         }
         
@@ -149,137 +149,137 @@ public class VideoScaleManager {
     }
     
     /**
-     * Set specific scale mode
-     * Thread-safe method with validation
+     * Set specific scale mode for current orientation
      */
     public synchronized void setScaleMode(@ScaleMode int scaleMode) {
         if (!isValidScaleMode(scaleMode)) {
-            throw new IllegalArgumentException("Invalid scale mode: " + scaleMode);
+            Log.w(TAG, "Invalid scale mode: " + scaleMode);
+            return;
         }
         
-        // Store user preference (only matters in portrait)
-        if (!isLandscape) {
-            preferredScaleMode = scaleMode;
+        if (isLandscape) {
+            landscapeScaleMode = scaleMode;
+        } else {
+            portraitScaleMode = scaleMode;
         }
         
-        // In landscape, always use ZOOM regardless of preference
-        @ScaleMode int effectiveMode = isLandscape ? SCALE_ZOOM : scaleMode;
-        
-        if (currentScaleMode != effectiveMode) {
-            applyScaleModeInternal(effectiveMode);
-        }
+        savePreferences();
+        applyScaleModeInternal(scaleMode);
     }
     
-    /**
-     * Get current scale mode
-     */
     @ScaleMode
     public synchronized int getCurrentScaleMode() {
         return currentScaleMode;
     }
     
-    /**
-     * Get optimal scale mode for current orientation
-     */
     @ScaleMode
     public synchronized int getOptimalScaleMode() {
-        return isLandscape ? SCALE_ZOOM : preferredScaleMode;
+        return isLandscape ? landscapeScaleMode : portraitScaleMode;
     }
     
     /**
-     * Get scale mode name for display
+     * Get display name for scale mode
      */
     @NonNull
     public static String getScaleModeName(@ScaleMode int scaleMode) {
         switch (scaleMode) {
+            case SCALE_DEFAULT:
+                return "Default";
             case SCALE_FIT:
                 return "Fit";
             case SCALE_FILL:
                 return "Fill";
             case SCALE_ZOOM:
                 return "Zoom";
+            case SCALE_1_1:
+                return "1:1";
+            case SCALE_4_3:
+                return "4:3";
+            case SCALE_16_9:
+                return "16:9";
+            case SCALE_18_9:
+                return "18:9";
+            case SCALE_21_9:
+                return "21:9";
             default:
                 return "Unknown";
         }
     }
     
     /**
-     * Get current scale mode name
+     * Get all available scale modes
      */
+    @NonNull
+    public static int[] getAllScaleModes() {
+        return new int[]{
+            SCALE_DEFAULT,
+            SCALE_FIT,
+            SCALE_FILL,
+            SCALE_ZOOM,
+            SCALE_16_9,
+            SCALE_4_3,
+            SCALE_1_1,
+            SCALE_18_9,
+            SCALE_21_9
+        };
+    }
+    
     @NonNull
     public synchronized String getCurrentScaleModeName() {
         return getScaleModeName(currentScaleMode);
     }
     
-    /**
-     * Check if in landscape mode
-     */
     public synchronized boolean isLandscapeMode() {
         return isLandscape;
     }
     
-    /**
-     * Reset to default scale mode
-     */
     public synchronized void resetToDefault() {
-        preferredScaleMode = SCALE_FIT;
-        setScaleMode(SCALE_FIT);
+        portraitScaleMode = SCALE_DEFAULT;
+        landscapeScaleMode = SCALE_DEFAULT;
+        savePreferences();
+        setScaleMode(SCALE_DEFAULT);
     }
     
-    /**
-     * Check if scale mode can be changed in current orientation
-     */
-    public synchronized boolean canChangeScaleMode() {
-        return !isLandscape;
-    }
-    
-    /**
-     * Save current scale mode for state restoration
-     */
     @ScaleMode
     public synchronized int saveState() {
-        return preferredScaleMode;
+        return isLandscape ? landscapeScaleMode : portraitScaleMode;
     }
     
-    /**
-     * Restore saved scale mode
-     */
     public synchronized void restoreState(@ScaleMode int savedScaleMode) {
         if (!isValidScaleMode(savedScaleMode)) {
             return;
         }
         
-        preferredScaleMode = savedScaleMode;
-        @ScaleMode int effectiveMode = getOptimalScaleMode();
-        applyScaleModeInternal(effectiveMode);
+        if (isLandscape) {
+            landscapeScaleMode = savedScaleMode;
+        } else {
+            portraitScaleMode = savedScaleMode;
+        }
+        
+        savePreferences();
+        applyScaleModeInternal(savedScaleMode);
     }
     
-    /**
-     * Force reapply current optimal scale mode
-     * Useful after layout changes or configuration updates
-     */
     public synchronized void reapplyScaleMode() {
         applyScaleModeInternal(getOptimalScaleMode());
     }
     
-    /**
-     * Clean up resources and prevent memory leaks
-     */
     public synchronized void release() {
         listener = null;
         PlayerView playerView = playerViewRef.get();
         if (playerView != null) {
             playerViewRef.clear();
         }
+        Context context = contextRef.get();
+        if (context != null) {
+            contextRef.clear();
+        }
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // Private Helper Methods
+    // Private Methods
     // ═══════════════════════════════════════════════════════════════
     
-    /**
-     * Internal method to apply scale mode with proper thread handling
-     */
     private void applyScaleModeInternal(@ScaleMode int scaleMode) {
         currentScaleMode = scaleMode;
         
@@ -293,7 +293,7 @@ public class VideoScaleManager {
     }
     
     /**
-     * Apply scale mode to PlayerView (must be called on main thread)
+     * Apply scale mode to PlayerView with intelligent defaults
      */
     private void applyScaleModeToView(@ScaleMode int scaleMode) {
         PlayerView playerView = playerViewRef.get();
@@ -301,20 +301,97 @@ public class VideoScaleManager {
             return;
         }
         
-        // Set resize mode on PlayerView
-        playerView.setResizeMode(scaleMode);
+        int resizeMode;
+        String aspectRatio = null;
         
-        if (isLandscape) {
-            // Ensure content fills the screen completely in landscape
-            playerView.setKeepContentOnPlayerReset(true);
-            // Force layout update to apply changes immediately
-            playerView.requestLayout();
+        switch (scaleMode) {
+            case SCALE_DEFAULT:
+                // Smart default: Fill in landscape, Fit in portrait (no black bars)
+                if (isLandscape) {
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+                } else {
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                }
+                break;
+                
+            case SCALE_FIT:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                break;
+                
+            case SCALE_FILL:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
+                break;
+                
+            case SCALE_ZOOM:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+                break;
+                
+            case SCALE_1_1:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                aspectRatio = "1:1";
+                break;
+                
+            case SCALE_4_3:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                aspectRatio = "4:3";
+                break;
+                
+            case SCALE_16_9:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                aspectRatio = "16:9";
+                break;
+                
+            case SCALE_18_9:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                aspectRatio = "18:9";
+                break;
+                
+            case SCALE_21_9:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                aspectRatio = "21:9";
+                break;
+                
+            default:
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+                break;
         }
+        
+        playerView.setResizeMode(resizeMode);
+        
+        // Apply aspect ratio if specified
+        if (aspectRatio != null) {
+            String[] parts = aspectRatio.split(":");
+            if (parts.length == 2) {
+                try {
+                    float width = Float.parseFloat(parts[0]);
+                    float height = Float.parseFloat(parts[1]);
+                    float ratio = width / height;
+                    
+                    // Set aspect ratio on the video surface
+                    if (playerView.getVideoSurfaceView() instanceof AspectRatioFrameLayout) {
+                        ((AspectRatioFrameLayout) playerView.getVideoSurfaceView())
+                            .setAspectRatio(ratio);
+                    }
+                } catch (NumberFormatException e) {
+                    Log.e(TAG, "Invalid aspect ratio: " + aspectRatio, e);
+                }
+            }
+        }
+        
+        // Ensure proper layout in landscape (no black bars at top)
+        if (isLandscape) {
+            playerView.setKeepContentOnPlayerReset(true);
+            
+            // Remove any padding that might cause black bars
+            playerView.setPadding(0, 0, 0, 0);
+        }
+        
+        playerView.requestLayout();
+        
+        Log.d(TAG, String.format("Applied scale mode: %s (resize=%d) in %s", 
+            getScaleModeName(scaleMode), resizeMode, isLandscape ? "landscape" : "portrait"));
     }
     
-    /**
-     * Notify listener of scale mode change (thread-safe)
-     */
     private void notifyListener(@ScaleMode int scaleMode) {
         ScaleModeChangeListener currentListener = listener;
         if (currentListener != null) {
@@ -331,10 +408,7 @@ public class VideoScaleManager {
         }
     }
     
-    /**
-     * Validate scale mode value
-     */
     private boolean isValidScaleMode(int scaleMode) {
-        return scaleMode == SCALE_FIT || scaleMode == SCALE_FILL || scaleMode == SCALE_ZOOM;
+        return scaleMode >= SCALE_DEFAULT && scaleMode <= SCALE_21_9;
     }
 }

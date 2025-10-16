@@ -153,7 +153,7 @@ public class PlayerNotificationManager {
             @Override
             public void onPlay() {
                 Log.d(TAG, "MediaSession: onPlay - Resuming playback");
-                sendServiceIntent(PlayerConstants.ACTION_PLAY);
+                sendServiceIntent(PlayerConstants.ACTION_PAUSE); // This toggles play/pause
             }
             
             @Override
@@ -463,14 +463,29 @@ public class PlayerNotificationManager {
     
     
     private PendingIntent createContentIntent() {
-        Intent intent = context.getPackageManager()
-            .getLaunchIntentForPackage(context.getPackageName());
-        
-        if (intent == null) {
-            intent = new Intent();
+        Intent intent;
+        try {
+            // Try to open PlayerActivity with current playback position
+            Class<?> playerActivityClass = Class.forName("com.nidoham.opentube.player.PlayerActivity");
+            intent = new Intent(context, playerActivityClass);
+            intent.putExtra("position", currentPosition);
+            intent.putExtra("duration", duration);
+            intent.putExtra("title", currentTitle);
+            intent.putExtra("artist", currentArtist);
+            intent.putExtra("from_notification", true);
+            Log.d(TAG, "Content intent created for PlayerActivity with position: " + currentPosition);
+        } catch (ClassNotFoundException e) {
+            // Fallback to launcher activity if PlayerActivity not found
+            Log.w(TAG, "PlayerActivity not found, using launcher activity", e);
+            intent = context.getPackageManager()
+                .getLaunchIntentForPackage(context.getPackageName());
+            
+            if (intent == null) {
+                intent = new Intent();
+            }
         }
         
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
