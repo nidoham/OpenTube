@@ -5,25 +5,55 @@ on:
 
 jobs:
   build:
+    name: Build Debug APK
     runs-on: ubuntu-latest
 
     steps:
+      # 🧩 Step 1: Checkout source
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      # ⚙️ Step 2: Setup Java & Gradle Cache
+      - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '17'
           cache: gradle
 
+      # ⚡ Step 3: Cache Gradle Files (Dependencies + Wrapper)
+      - name: Cache Gradle Files
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # 🚀 Step 4: Setup Android SDK (with caching)
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 35
+          build-tools: '35.0.0'
+          cache: true
+
+      # 🔑 Step 5: Grant execute permission
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Clean and Build Debug APK
-        run: ./gradlew clean assembleDebug --no-daemon --stacktrace
+      # 🧱 Step 6: Build APK (optimized flags)
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --no-scan \
+            --stacktrace \
+            -x test -x lint
 
+      # 📦 Step 7: Upload Artifact
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
